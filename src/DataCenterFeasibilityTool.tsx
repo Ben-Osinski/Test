@@ -241,7 +241,8 @@ export default function DataCenterFeasibilityTool() {
 
   const manualMixCalc = useMemo(() => {
     if (inputs.mixMode !== "manual") return null;
-    const reqMW = inputs.genSizeToFacility ? calc.effectiveTargetItMw * calc.pue : calc.effectiveTargetItMw;
+    const bindingIt = Math.min(calc.effectiveTargetItMw, calc.itMwFromLand);
+    const reqMW = inputs.genSizeToFacility ? bindingIt * calc.pue : bindingIt;
     const kLoss = kFromReliability(inputs.reliability);
 
     const firmRows = mix.filter((r) => r.isFirm && r.units > 0);
@@ -295,7 +296,8 @@ export default function DataCenterFeasibilityTool() {
 
   const shareCalc = useMemo(() => {
     if (inputs.mixMode !== "share") return null;
-    const reqMW = inputs.genSizeToFacility ? calc.effectiveTargetItMw * calc.pue : calc.effectiveTargetItMw;
+    const bindingIt = Math.min(calc.effectiveTargetItMw, calc.itMwFromLand);
+    const reqMW = inputs.genSizeToFacility ? bindingIt * calc.pue : bindingIt;
     const kLoss = kFromReliability(inputs.reliability);
 
     const firmShares = firmList.map((t) => ({ t, pct: Math.max(0, shares[t] || 0) }));
