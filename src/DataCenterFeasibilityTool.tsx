@@ -1,12 +1,4 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Switch } from "@/components/ui/switch";
-import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
 import { Info, Settings2, PieChart as PieIcon, SlidersHorizontal, ShieldAlert } from "lucide-react";
 import {
   PieChart,
@@ -21,6 +13,16 @@ import {
   CartesianGrid,
   Legend,
 } from "recharts";
+
+// Restore shadcn/ui components
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 
 // ================= Brand Palette =================
 const BRAND = {
@@ -50,48 +52,42 @@ const MIX_COLORS = [
 // ================= Defaults =================
 const DEFAULT_GENLAND = {
   Grid: { per_unit_acres: 0 },
-  "Recip (NG)": { per_unit_acres: 0.7 }, // per 18 MW engine (~0.04 ac/MW)
-  SCGT: { per_unit_acres: 2.0 }, // per 57 MW unit (~0.035 ac/MW)
-  "CCGT (5000F 1x1)": { per_unit_acres: 12.0 }, // per 373 MW block (~0.032 ac/MW)
-  "Fuel Cells (SOFC)": { per_unit_acres: 0.2 }, // 10 MW block (~0.02 ac/MW)
-  PV: { per_MW_acres: 6.5 }, // total site spacing
-  Wind: { per_MW_acres: 40 }, // spacing; disturbed is much smaller
-  BESS: { per_MW_hr: 0.0075, site_overhead_acres: 0.5 }, // duration-based: ac/MW = 0.0075*hours + site overhead
+  "Recip (NG)": { per_unit_acres: 0.7 },
+  SCGT: { per_unit_acres: 2.0 },
+  "CCGT (5000F 1x1)": { per_unit_acres: 12.0 },
+  "Fuel Cells (SOFC)": { per_unit_acres: 0.2 },
+  PV: { per_MW_acres: 6.5 },
+  Wind: { per_MW_acres: 40 },
+  BESS: { per_MW_hr: 0.0075, site_overhead_acres: 0.5 },
 };
 
 const DEFAULT_INPUTS = {
-  // Land & design
-  mode: "target", // target vs land
+  mode: "target",
   parcelAcres: 500,
-  buildablePct: 30, // % of parcel
-  siteCoveragePct: 50, // building footprint as % of buildable
-  stories: 1, // stacked floors
-  supportPct: 35, // of building sqft
+  buildablePct: 30,
+  siteCoveragePct: 50,
+  stories: 1,
+  supportPct: 35,
   mepYardPct: 15,
   roadsPct: 10,
   substationAcres: 2.0,
   sqftPerRack: 60,
   rackDensityKw: 10,
-  // Cooling & efficiency
-  cooling: "Air", // Air | Liquid
+  cooling: "Air",
   pue: 1.35,
   wue_L_per_kWh: 0.3,
-  // Phasing
   targetItMw: 100,
   phases: 3,
   equalizePhases: true,
   phaseItMw: [33.3, 33.3, 33.3],
-  // Power & reliability
-  reliability: "99.9", // 99.9 | 99.99 | 99.999
-  mixMode: "share", // share | manual
-  genSizeToFacility: true, // size generation to facility (IT * PUE)
-  // Renewables
+  reliability: "99.9",
+  mixMode: "share",
+  genSizeToFacility: true,
   pvPanelWatt: 550,
-  // Land db for generation
   genLand: DEFAULT_GENLAND,
 };
 
-// --- Helpers ---
+// Helpers
 function toNumber(v: any, fallback = 0) {
   const n = typeof v === "number" ? v : parseFloat(String(v).replace(/,/g, ""));
   return Number.isFinite(n) ? n : fallback;
@@ -100,7 +96,7 @@ function acresToSqft(acres: number) { return acres * 43560; }
 function galPerHourToGpm(gph: number) { return gph / 60; }
 function litersToGallons(l: number) { return l / 3.78541; }
 
-const BTU_PER_SCF = 1037; // natural gas ~Btu/scf (HHV, approx)
+const BTU_PER_SCF = 1037;
 const LS_KEY = "dc-feasibility-v4";
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -110,7 +106,6 @@ export default function DataCenterFeasibilityTool() {
     return saved ? { ...DEFAULT_INPUTS, ...JSON.parse(saved) } : DEFAULT_INPUTS;
   });
 
-  // Library of representative blocks
   const MIX_LIBRARY: Record<string, any> = {
     Grid: { tech: "Grid", unitMW: 100, unitAvailability: 0.9995, heatRate: 0, water_gal_per_MWh: 0, isFirm: true, fuel: "None" },
     "Recip (NG)": { tech: "Recip (NG)", unitMW: 18, unitAvailability: 0.985, heatRate: 8924, water_gal_per_MWh: 1, isFirm: true, fuel: "NG" },
@@ -124,14 +119,12 @@ export default function DataCenterFeasibilityTool() {
 
   const DEFAULT_ELCC = { PV: 40, Wind: 20, BESS: 100 };
 
-  // Manual-mix rows (for Manual mode)
   const [mix, setMix] = useState(() => [
     { id: uid(), tech: "CCGT (5000F 1x1)", units: 1, ...MIX_LIBRARY["CCGT (5000F 1x1)"] },
     { id: uid(), tech: "PV", units: 0, ...MIX_LIBRARY["PV"] },
     { id: uid(), tech: "Wind", units: 0, ...MIX_LIBRARY["Wind"] },
   ]);
 
-  // Share-mode sliders (default 0%)
   const firmList = ["Grid", "Recip (NG)", "SCGT", "CCGT (5000F 1x1)", "Fuel Cells (SOFC)"];
   const nonFirmList = ["PV", "Wind", "BESS"];
   const [shares, setShares] = useState({ Grid: 0, "Recip (NG)": 0, SCGT: 0, "CCGT (5000F 1x1)": 0, "Fuel Cells (SOFC)": 0, PV: 0, Wind: 0, BESS: 0 });
@@ -139,7 +132,12 @@ export default function DataCenterFeasibilityTool() {
   const [bessHours, setBessHours] = useState(4);
   const [elccEnabled, setElccEnabled] = useState(true);
 
-  // Preset highlighting
+  // Derive rack layout preset for the Select so we don't show duplicate labels
+  const rackPreset = useMemo(
+    () => (inputs.sqftPerRack === 30 ? "30" : inputs.sqftPerRack === 45 ? "45" : inputs.sqftPerRack === 60 ? "60" : "custom"),
+    [inputs.sqftPerRack]
+  );
+
   const preset = useMemo(() => {
     const s = inputs.sqftPerRack, sup = inputs.supportPct;
     if (Math.abs(s - 30) < 0.5 && Math.abs(sup - 35) < 0.5) return "aggr";
@@ -148,7 +146,6 @@ export default function DataCenterFeasibilityTool() {
     return "custom";
   }, [inputs.sqftPerRack, inputs.supportPct]);
 
-  // Sync phase length
   useEffect(() => {
     setInputs((s: any) => {
       const phases = Math.max(1, Math.floor(s.phases));
@@ -158,17 +155,14 @@ export default function DataCenterFeasibilityTool() {
     });
   }, [inputs.phases]);
 
-  // Suggest WUE on cooling change
   useEffect(() => {
     setInputs((s: any) => ({ ...s, wue_L_per_kWh: s.cooling === "Liquid" ? 0.15 : 0.3 }));
   }, [inputs.cooling]);
 
-  // Persist
   useEffect(() => {
     if (typeof window !== "undefined") window.localStorage.setItem(LS_KEY, JSON.stringify(inputs));
   }, [inputs]);
 
-  // =================== Land/IT Calculation ===================
   const calc = useMemo(() => {
     const buildableFrac = Math.min(1, Math.max(0, inputs.buildablePct / 100));
     const siteCoverage = Math.min(1, Math.max(0, inputs.siteCoveragePct / 100));
@@ -213,7 +207,7 @@ export default function DataCenterFeasibilityTool() {
     const manualSum = phaseValues.reduce((a: number, b: number) => a + b, 0);
     const effectiveTargetItMw = inputs.equalizePhases ? targetItMw : manualSum;
 
-    const it_kW = (inputs.mode === "target" ? effectiveTargetItMw : siteMaxItMw) * 1000; // kWh/h = kW
+    const it_kW = (inputs.mode === "target" ? effectiveTargetItMw : siteMaxItMw) * 1000;
     const wue_L_per_kWh = Math.max(0, inputs.wue_L_per_kWh);
     const water_L_per_h_dc = wue_L_per_kWh * it_kW;
     const water_gpm_dc = galPerHourToGpm(litersToGallons(water_L_per_h_dc));
@@ -243,10 +237,8 @@ export default function DataCenterFeasibilityTool() {
     };
   }, [inputs]);
 
-  // =============== Reliability + Mix =================
   function kFromReliability(r: string) { return r === "99.9" ? 1 : r === "99.99" ? 2 : 3; }
 
-  // Manual-mix calculations
   const manualMixCalc = useMemo(() => {
     if (inputs.mixMode !== "manual") return null;
     const reqMW = inputs.genSizeToFacility ? calc.effectiveTargetItMw * calc.pue : calc.effectiveTargetItMw;
@@ -286,7 +278,6 @@ export default function DataCenterFeasibilityTool() {
       { name: "BESS (non-firm)", installed: bessMW, dispatched: 0, units: rowBy("BESS")?.units ?? 0, isFirm: false },
     ];
 
-    // generation water/fuel (proportional across firm techs only)
     let fuel_MMBtu_per_h = 0, gas_MSCF_per_h = 0, genWater_gpm = 0;
     compFirmWithDispatch.forEach((row) => {
       const lib = (MIX_LIBRARY as any)[row.name];
@@ -302,7 +293,6 @@ export default function DataCenterFeasibilityTool() {
     return { reqMW, kLoss, totalInstalledFirm, firmAfterLoss, accredited, meets, comp: compFirmWithDispatch.concat(compNonFirm), fuel_MMBtu_per_h, gas_MSCF_per_h, genWater_gpm, totalWater_gpm: genWater_gpm + calc.water_gpm_dc, pvMW, windMW, bessMW, dropList };
   }, [inputs.mixMode, mix, inputs, calc.effectiveTargetItMw, calc.pue, calc.water_gpm_dc, elcc, bessHours, elccEnabled]);
 
-  // Share-mode calculations
   const shareCalc = useMemo(() => {
     if (inputs.mixMode !== "share") return null;
     const reqMW = inputs.genSizeToFacility ? calc.effectiveTargetItMw * calc.pue : calc.effectiveTargetItMw;
@@ -353,7 +343,6 @@ export default function DataCenterFeasibilityTool() {
       if (firmAfterLoss === 0) { const res = evaluate(units); firmAfterLoss = res.firmAfterLoss; dropList = res.dropList; }
     } else { firmAfterLoss = 0; }
 
-    // Non-firm nameplate from sliders (% of required MW)
     const pvMW = (Math.max(0, shares.PV || 0) / 100) * reqMW;
     const windMW = (Math.max(0, shares.Wind || 0) / 100) * reqMW;
     const bessMW = (Math.max(0, shares.BESS || 0) / 100) * reqMW;
@@ -396,7 +385,6 @@ export default function DataCenterFeasibilityTool() {
 
   const activeCalc = inputs.mixMode === "share" ? shareCalc : manualMixCalc;
 
-  // ======= Derived: Generation footprint =======
   const genFootprint = useMemo(() => {
     const comp = activeCalc?.comp || [];
     const rows: { name: string; acres: number; installed: number; units: number }[] = [] as any;
@@ -421,7 +409,6 @@ export default function DataCenterFeasibilityTool() {
     return { rows, total };
   }, [activeCalc, inputs.genLand, bessHours]);
 
-  // ======= Land pie data =======
   const landPieData = useMemo(() => {
     const data = [
       { name: "Building", value: calc.buildingFootprintAcres },
@@ -434,7 +421,6 @@ export default function DataCenterFeasibilityTool() {
     return data.filter((d) => d.value > 0.0001);
   }, [calc.buildingFootprintAcres, calc.mepYardAcres, calc.substationAcres, calc.roadsAcres, calc.openAcres, genFootprint?.total]);
 
-  // Manual-mix helpers
   function addRow() { setMix((m: any[]) => [...m, { id: uid(), tech: "SCGT", units: 1, ...MIX_LIBRARY["SCGT"] }]); }
   function removeRow(id: string) { setMix((m: any[]) => m.filter((r) => r.id !== id)); }
   function updateRow(id: string, patch: any) { setMix((m: any[]) => m.map((r) => (r.id === id ? { ...r, ...patch } : r))); }
@@ -456,7 +442,6 @@ export default function DataCenterFeasibilityTool() {
 
   const sumFirmShares = useMemo(() => firmList.reduce((a, t) => a + Math.max(0, shares[t] || 0), 0), [shares]);
 
-  // ======= Derived visuals =======
   const mixPieData = useMemo(() => {
     const comp = activeCalc?.comp || [];
     return comp.filter((d: any) => (d.installed || 0) > 0).map((d: any) => ({ name: d.name, value: d.installed }));
@@ -464,18 +449,16 @@ export default function DataCenterFeasibilityTool() {
 
   const phaseSeries = useMemo(() => calc.phaseValues.map((v: number, i: number) => ({ name: `P${i + 1}`, it: v })), [calc.phaseValues]);
 
-  // =============== UI ===============
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-3xl font-semibold">Data Center Feasibility Tool — Js Rewrite (restored)</h1>
-          <p className="text-muted-foreground mt-1">Restored: IT/Facility overview, Phasing chart, non-firm tint, mix pie, and Reliability Event (N+k drop). Land pie includes generation footprint; brand palette applied.</p>
+          <h1 className="text-3xl font-semibold">Data Center Feasibility Tool</h1>
+          <p className="text-gray-600 mt-1">Shadcn UI + Recharts + Lucide. Restored imports.</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={resetAll}>Reset to defaults</Button>
-          <Settings2 className="h-5 w-5" />
-          <span className="text-sm text-muted-foreground">Prototype · v1.3</span>
+          <Settings2 className="h-5 w-5 text-gray-500" />
         </div>
       </div>
 
@@ -516,7 +499,7 @@ export default function DataCenterFeasibilityTool() {
                   <Input type="number" step={0.1} value={inputs.genLand.BESS.site_overhead_acres ?? 0} onChange={(e) => setInputs((s: any) => ({ ...s, genLand: { ...s.genLand, BESS: { ...s.genLand.BESS, site_overhead_acres: parseFloat(e.target.value || "0") } } }))} />
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-3">Screening values; PV/Wind reflect project spacing. BESS footprint scales with duration: acres = per-MW-hr × hours × MW + site overhead.</p>
+              <p className="text-xs text-gray-500 mt-3">Screening values; PV/Wind reflect project spacing. BESS footprint scales with duration.</p>
             </CardContent>
           </Card>
 
@@ -537,8 +520,8 @@ export default function DataCenterFeasibilityTool() {
             <CardHeader><CardTitle>Cooling, PUE & WUE</CardTitle></CardHeader>
             <CardContent>
               <ul className="list-disc pl-6 space-y-1 text-sm">
-                <li><strong>PUE:</strong> User‑set and independent of cooling choice for screening. Typical ranges: ~1.25–1.5 (air); ~1.10–1.35 (liquid) depending on climate and density.</li>
-                <li><strong>WUE default suggestion:</strong> Air ≈ 0.30 L/kWh; Liquid ≈ 0.15 L/kWh. You can override directly in Inputs.</li>
+                <li><strong>PUE:</strong> User‑set; typical ranges: ~1.25–1.5 (air); ~1.10–1.35 (liquid).</li>
+                <li><strong>WUE default:</strong> Air ≈ 0.30 L/kWh; Liquid ≈ 0.15 L/kWh (override in Inputs).</li>
               </ul>
             </CardContent>
           </Card>
@@ -547,16 +530,15 @@ export default function DataCenterFeasibilityTool() {
             <CardHeader><CardTitle>Representative Power Blocks (screening)</CardTitle></CardHeader>
             <CardContent>
               <ul className="list-disc pl-6 space-y-1 text-sm">
-                <li><strong>Grid:</strong> 100 MW block (availability 99.95%); no heat or water accounting.</li>
-                <li><strong>Recip (NG):</strong> 18 MW/unit; heat rate ~8,924 Btu/kWh; ~1 gal/MWh water.</li>
-                <li><strong>SCGT:</strong> 57 MW/unit; ~10,999 Btu/kWh; zero process water assumed.</li>
-                <li><strong>CCGT (5000F 1x1):</strong> 373.3 MW/unit; ~7,548 Btu/kWh; ~200 gal/MWh water (wet cooling representative).</li>
-                <li><strong>Fuel Cells (SOFC):</strong> 10 MW block; ~6,318 Btu/kWh; negligible water.</li>
-                <li><strong>PV:</strong> 4.03 MW block (for count approximation); <em>non‑firm</em>.</li>
+                <li><strong>Grid:</strong> 100 MW (availability 99.95%).</li>
+                <li><strong>Recip (NG):</strong> 18 MW; ~8,924 Btu/kWh; ~1 gal/MWh water.</li>
+                <li><strong>SCGT:</strong> 57 MW; ~10,999 Btu/kWh; zero process water assumed.</li>
+                <li><strong>CCGT (5000F 1x1):</strong> 373.3 MW; ~7,548 Btu/kWh; ~200 gal/MWh water (wet cooling).</li>
+                <li><strong>Fuel Cells (SOFC):</strong> 10 MW; ~6,318 Btu/kWh; negligible water.</li>
+                <li><strong>PV:</strong> 4.03 MW block; <em>non‑firm</em>.</li>
                 <li><strong>Wind:</strong> 5.89 MW; <em>non‑firm</em>.</li>
-                <li><strong>BESS:</strong> 100 MW power block; duration set separately; <em>non‑firm</em> but can be accredited via ELCC.</li>
+                <li><strong>BESS:</strong> 100 MW power; duration set separately; <em>non‑firm</em> but can be accredited via ELCC.</li>
               </ul>
-              <p className="text-xs text-muted-foreground mt-2">Values are screening‑level and inspired by prior study inputs and industry ranges; refine per project and OEM data.</p>
             </CardContent>
           </Card>
 
@@ -564,9 +546,9 @@ export default function DataCenterFeasibilityTool() {
             <CardHeader><CardTitle>Reliability & Accreditation</CardTitle></CardHeader>
             <CardContent>
               <ul className="list-disc pl-6 space-y-1 text-sm">
-                <li><strong>Target sizing:</strong> Choose IT MW or Facility MW (IT×PUE applied) via the toggle.</li>
-                <li><strong>Reliability check:</strong> N+k by dropping the largest k firm units (k = 1 for 99.9%, 2 for 99.99%, 3 for 99.999%).</li>
-                <li><strong>ELCC (toggle):</strong> When enabled, accredited MW = PV×ELCC% + Wind×ELCC% + BESS×(ELCC%×duration/4h). Defaults: PV 40%, Wind 20%, BESS 100%.</li>
+                <li><strong>Target sizing:</strong> Choose IT MW or Facility MW (IT×PUE).</li>
+                <li><strong>Reliability check:</strong> N+k by dropping largest k firm units (k = 1/2/3 for 99.9/99.99/99.999%).</li>
+                <li><strong>ELCC toggle:</strong> Accredited MW = PV×ELCC% + Wind×ELCC% + BESS×(ELCC%×duration/4h).</li>
               </ul>
             </CardContent>
           </Card>
@@ -575,9 +557,8 @@ export default function DataCenterFeasibilityTool() {
             <CardHeader><CardTitle>Acre → IT MW Heuristics</CardTitle></CardHeader>
             <CardContent>
               <ul className="list-disc pl-6 space-y-1 text-sm">
-                <li>Single‑story, 35–45 ft²/rack @ ~10 kW/rack typically yields ~0.6–1.2 MW IT per acre buildable (before roads/MEP/substation set‑asides).</li>
-                <li>Higher density or smaller ft²/rack increases IT/acre; stacking floors scales linearly with story count.</li>
-                <li>Use this tool to stress test sensitivity (ft²/rack, support %, stories) rather than as a fixed rule.</li>
+                <li>Single‑story 35–45 ft²/rack @ ~10 kW/rack → ~0.6–1.2 MW IT per ac buildable (before roads/MEP/substation set‑asides).</li>
+                <li>Higher density or smaller ft²/rack increases IT/acre; stacking floors scales linearly with stories.</li>
               </ul>
             </CardContent>
           </Card>
@@ -591,7 +572,6 @@ export default function DataCenterFeasibilityTool() {
         {/* Power & Mix */}
         <TabsContent value="powermix" className="space-y-6">
           {PowerMixSection()}
-          {/* Reliability Event (N+k drop) */}
           <Card>
             <CardHeader><CardTitle className="flex items-center gap-2"><ShieldAlert className="h-5 w-5" /> Reliability Event (N+{kFromReliability(inputs.reliability)} drop)</CardTitle></CardHeader>
             <CardContent className="text-sm space-y-2">
@@ -614,25 +594,63 @@ export default function DataCenterFeasibilityTool() {
 
         {/* Results */}
         <TabsContent value="results" className="space-y-6">
-          {/* Top overview cards */}
           <div className="grid md:grid-cols-2 gap-4">
             <Card>
               <CardHeader><CardTitle>IT Capacity</CardTitle></CardHeader>
               <CardContent>
-                <div className="text-4xl font-semibold">{calc.itMwFromLand.toFixed(2)} <span className="text-2xl font-normal">MW</span></div>
-                <div className="text-sm text-green-700 mt-2">Computed from land</div>
+                {(() => {
+                  const targetIt = calc.effectiveTargetItMw;
+                  const siteIt = calc.itMwFromLand;
+                  const bindingIt = inputs.mode === "target" ? Math.min(targetIt, siteIt) : siteIt;
+                  return (
+                    <>
+                      <div className="text-4xl font-semibold">
+                        {bindingIt.toFixed(2)} <span className="text-2xl font-normal">MW</span>
+                      </div>
+                      {inputs.mode === "target" ? (
+                        <>
+                          {siteIt + 1e-6 < targetIt ? (
+                            <div className="text-xs text-amber-700 mt-2">Land-limited: target {targetIt.toFixed(2)} MW → site supports {siteIt.toFixed(2)} MW.</div>
+                          ) : (
+                            <div className="text-sm text-green-700 mt-2">Target input</div>
+                          )}
+                          <div className="text-xs text-gray-500">Site max from land: {siteIt.toFixed(2)} MW</div>
+                        </>
+                      ) : (
+                        <div className="text-sm text-green-700 mt-2">Computed from land</div>
+                      )}
+                    </>
+                  );
+                })()}
               </CardContent>
             </Card>
             <Card>
               <CardHeader><CardTitle>Facility Power</CardTitle></CardHeader>
               <CardContent>
-                <div className="text-4xl font-semibold">{(calc.effectiveTargetItMw * calc.pue).toFixed(2)} <span className="text-2xl font-normal">MW</span></div>
-                <div className="text-sm text-muted-foreground mt-2">PUE: {calc.pue.toFixed(2)} · IT share ≈ {(100 / calc.pue).toFixed(1)}%</div>
+                {(() => {
+                  const targetIt = calc.effectiveTargetItMw;
+                  const siteIt = calc.itMwFromLand;
+                  const bindingIt = inputs.mode === "target" ? Math.min(targetIt, siteIt) : siteIt;
+                  const facBinding = bindingIt * calc.pue;
+                  const facTarget = targetIt * calc.pue;
+                  return (
+                    <>
+                      <div className="text-4xl font-semibold">
+                        {facBinding.toFixed(2)} <span className="text-2xl font-normal">MW</span>
+                      </div>
+                      <div className="text-sm text-gray-500 mt-2">PUE: {calc.pue.toFixed(2)} · IT share ≈ {(100 / calc.pue).toFixed(1)}%</div>
+                      {inputs.mode === "target" && targetIt > siteIt && (
+                        <div className="text-xs text-amber-700 mt-1">
+                          Land-limited: target {facTarget.toFixed(0)} MW → site supports {facBinding.toFixed(0)} MW.
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </CardContent>
             </Card>
           </div>
 
-          {/* Land + Installed Mix */}
           <div className="grid md:grid-cols-2 gap-4">
             <Card>
               <CardHeader><CardTitle className="flex items-center gap-2"><PieIcon className="h-5 w-5" /> Land Summary</CardTitle></CardHeader>
@@ -676,14 +694,13 @@ export default function DataCenterFeasibilityTool() {
             </Card>
           </div>
 
-          {/* Phasing chart */}
           <Card>
             <CardHeader><CardTitle>Phasing (IT MW)</CardTitle></CardHeader>
             <CardContent style={{ height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={phaseSeries}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" label={{ value: "Technology", position: "insideBottom", offset: -5 }} />
+                  <XAxis dataKey="name" />
                   <YAxis label={{ value: "MW", angle: -90, position: "insideLeft" }} />
                   <ReTooltip />
                   <Bar dataKey="it" name="IT MW" fill={BRAND.ORANGE} />
@@ -692,7 +709,6 @@ export default function DataCenterFeasibilityTool() {
             </CardContent>
           </Card>
 
-          {/* Sized Units table */}
           <Card>
             <CardHeader><CardTitle>Sized Units to Meet Reliability</CardTitle></CardHeader>
             <CardContent>
@@ -725,7 +741,7 @@ export default function DataCenterFeasibilityTool() {
                   ))}
                 </tbody>
               </table>
-              <p className="text-xs text-muted-foreground mt-2">Non-firm add-ons sized from sliders or manual rows. Accreditation contributes to the reliability check; dispatch not modeled for non-firm.</p>
+              <p className="text-xs text-gray-500 mt-2">Non-firm add-ons sized from sliders or manual rows. Accreditation contributes to the reliability check; dispatch not modeled for non-firm.</p>
             </CardContent>
           </Card>
         </TabsContent>
@@ -733,12 +749,11 @@ export default function DataCenterFeasibilityTool() {
     </div>
   );
 
-  // ======== Local section components ========
   function Metric({ label, value, status }: { label: string; value: string; status?: boolean }) {
     return (
-      <div className="p-3 rounded border">
-        <div className="text-xs text-muted-foreground">{label}</div>
-        <div className={`text-base font-medium ${status === true ? "text-green-700" : status === false ? "text-red-700" : ""}`}>{value}</div>
+      <div className="p-3 rounded-xl border">
+        <div className="text-xs text-gray-500">{label}</div>
+        <div className={`${status === true ? "text-green-700" : status === false ? "text-red-700" : ""} text-base font-medium`}>{value}</div>
       </div>
     );
   }
@@ -766,7 +781,7 @@ export default function DataCenterFeasibilityTool() {
                   </div>
                 </div>
               ) : (
-                <div className="text-sm text-muted-foreground">Max IT will be computed from land, building, and rack inputs below.</div>
+                <div className="text-sm text-gray-500">Max IT will be computed from land, building, and rack inputs below.</div>
               )}
             </CardContent>
           </Card>
@@ -789,13 +804,25 @@ export default function DataCenterFeasibilityTool() {
             <CardContent className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <Label className="text-sm">Rack layout (ft² per rack)</Label>
-                <Select value={String(inputs.sqftPerRack)} onValueChange={(v) => setInputs((s: any) => ({ ...s, sqftPerRack: toNumber(v, s.sqftPerRack) }))}>
-                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <Select
+                  value={rackPreset}
+                  onValueChange={(v: any) =>
+                    setInputs((s: any) => ({
+                      ...s,
+                      sqftPerRack: v === "30" ? 30 : v === "45" ? 45 : v === "60" ? 60 : s.sqftPerRack,
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choose layout" />
+                  </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="30">Dense (30)</SelectItem>
                     <SelectItem value="45">Typical (45)</SelectItem>
                     <SelectItem value="60">Spacious (60)</SelectItem>
-                    <SelectItem value={String(inputs.sqftPerRack)}>Current ({inputs.sqftPerRack})</SelectItem>
+                    {rackPreset === "custom" && (
+                      <SelectItem value="custom">Custom ({inputs.sqftPerRack})</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -805,8 +832,10 @@ export default function DataCenterFeasibilityTool() {
 
               <div className="col-span-2">
                 <Label>Cooling</Label>
-                <Select value={inputs.cooling} onValueChange={(v) => setInputs((s: any) => ({ ...s, cooling: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                <Select value={inputs.cooling} onValueChange={(v: any) => setInputs((s: any) => ({ ...s, cooling: v }))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Cooling" />
+                  </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="Air">Air</SelectItem>
                     <SelectItem value="Liquid">Liquid</SelectItem>
@@ -825,7 +854,7 @@ export default function DataCenterFeasibilityTool() {
           <CardContent>
             <div className="flex items-center gap-3 mb-3">
               <Label className="w-40">Equalize phases</Label>
-              <Switch checked={inputs.equalizePhases} onCheckedChange={(c) => setInputs((s: any) => ({ ...s, equalizePhases: c }))} />
+              <Switch checked={inputs.equalizePhases} onCheckedChange={(c: any) => setInputs((s: any) => ({ ...s, equalizePhases: c }))} />
               <div className="flex items-center gap-2 ml-6">
                 <Label>Phases</Label>
                 <Input className="w-24" type="number" value={inputs.phases} min={1} step={1} onChange={(e) => setInputs((s: any) => ({ ...s, phases: Math.max(1, parseInt(e.target.value || "1", 10)) }))} />
@@ -854,7 +883,7 @@ export default function DataCenterFeasibilityTool() {
             <Button variant={inputs.mixMode === "manual" ? "default" : "outline"} onClick={() => setInputs((s: any) => ({ ...s, mixMode: "manual" }))}>Manual units</Button>
             <div className="ml-auto flex items-center gap-2">
               <Label>Size to Facility (IT×PUE)</Label>
-              <Switch checked={inputs.genSizeToFacility} onCheckedChange={(c) => setInputs((s: any) => ({ ...s, genSizeToFacility: c }))} />
+              <Switch checked={inputs.genSizeToFacility} onCheckedChange={(c: any) => setInputs((s: any) => ({ ...s, genSizeToFacility: c }))} />
             </div>
           </div>
 
@@ -882,7 +911,7 @@ export default function DataCenterFeasibilityTool() {
                           <SliderRow key={t} label={t} value={(shares as any)[t]} onChange={(v: number) => setShares((s: any) => ({ ...s, [t]: v }))} color={MIX_COLORS[i % MIX_COLORS.length]} />
                         ))}
                       </div>
-                      <div className="text-sm text-muted-foreground mt-1">Sum of firm shares: <strong>{sumFirmShares.toFixed(0)}%</strong> (optimizer adds units until reliability target is met).</div>
+                      <div className="text-sm text-gray-500 mt-1">Sum of firm shares: <strong>{sumFirmShares.toFixed(0)}%</strong> (optimizer adds units until reliability target is met).</div>
                     </div>
                     <div>
                       <Label className="font-semibold">Non-firm nameplate (% of required MW)</Label>
@@ -905,8 +934,10 @@ export default function DataCenterFeasibilityTool() {
                       <div key={row.id} className="grid grid-cols-12 gap-2 items-end">
                         <div className="col-span-5">
                           <Label>Technology</Label>
-                          <Select value={row.tech} onValueChange={(v) => onChangeTech(row.id, v)}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
+                          <Select value={row.tech} onValueChange={(v: any) => onChangeTech(row.id, v)}>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Technology" />
+                            </SelectTrigger>
                             <SelectContent>
                               {Object.keys(MIX_LIBRARY).map((t) => (
                                 <SelectItem key={t} value={t}>{t}</SelectItem>
@@ -918,7 +949,7 @@ export default function DataCenterFeasibilityTool() {
                           <NumberField id={`u-${row.id}`} label="Units" value={row.units} onChange={(n: number) => updateRow(row.id, { units: Math.max(0, Math.floor(n)) })} step={1} min={0} />
                         </div>
                         <div className="col-span-3">
-                          <div className="text-xs text-muted-foreground">Nameplate</div>
+                          <div className="text-xs text-gray-500">Nameplate</div>
                           <div className="text-sm font-medium">{(row.units * row.unitMW).toFixed(1)} MW</div>
                         </div>
                         <div className="col-span-1 flex justify-end">
@@ -937,7 +968,7 @@ export default function DataCenterFeasibilityTool() {
               <CardContent className="space-y-2">
                 <MiniReliabilitySummary calc={activeCalc} elccEnabled={elccEnabled} />
                 {(activeCalc?.dropList || []).length > 0 && (
-                  <div className="text-xs text-muted-foreground">Worst-case outage drops {(activeCalc?.dropList || []).length} largest firm unit(s).</div>
+                  <div className="text-xs text-gray-500">Worst-case outage drops {(activeCalc?.dropList || []).length} largest firm unit(s).</div>
                 )}
               </CardContent>
             </Card>
@@ -973,14 +1004,14 @@ export default function DataCenterFeasibilityTool() {
   }
 }
 
-// ---------------- UI Helpers ----------------
+// UI helpers
 function NumberField({ id, label, value, onChange, suffix, step = 1, min = -Infinity, max = Infinity }: any) {
   return (
     <div>
       <Label htmlFor={id}>{label}</Label>
       <div className="flex items-center gap-2">
         <Input id={id} type="number" value={value} step={step} min={min} max={max} onChange={(e) => onChange(toNumber(e.target.value, value))} />
-        {suffix && <span className="text-sm text-muted-foreground">{suffix}</span>}
+        {suffix && <span className="text-sm text-gray-500">{suffix}</span>}
       </div>
     </div>
   );
@@ -992,7 +1023,7 @@ function PercentField({ id, label, value, onChange }: any) {
     <div>
       <Label htmlFor={id}>{label}</Label>
       <div className="flex items-center gap-3">
-        <Slider className="w-full" value={[v]} min={0} max={100} step={1} onValueChange={([x]) => onChange(x)} />
+        <Slider className="w-full" value={[v]} min={0} max={100} step={1} onValueChange={([x]: any) => onChange(x)} />
         <Input id={id} className="w-20" type="number" value={v} min={0} max={100} step={1} onChange={(e) => onChange(Math.max(0, Math.min(100, toNumber(e.target.value, v))))} />
         <span>%</span>
       </div>
@@ -1005,13 +1036,13 @@ function SliderRow({ label, value = 0, onChange, min = 0, max = 100, step = 1, c
   return (
     <div>
       <div className="flex justify-between text-sm mb-1"><span>{label}</span><span>{v}{max === 100 ? "%" : ""}</span></div>
-      <Slider value={[v]} min={min} max={max} step={step} onValueChange={([x]) => onChange(x)} style={{ accentColor: color }} />
+      <Slider value={[v]} min={min} max={max} step={step} onValueChange={([x]: any) => onChange(x)} className="w-full" />
     </div>
   );
 }
 
 function MiniReliabilitySummary({ calc, elccEnabled }: any) {
-  if (!calc) return <div className="text-sm text-muted-foreground">No mix yet.</div>;
+  if (!calc) return <div className="text-sm text-gray-500">No mix yet.</div>;
   const badgeClass = calc.meets ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800";
   const installedFirm = (calc?.comp || []).filter((r: any) => r.isFirm).reduce((a: number,b: any) => a + ((b.installed || 0)), 0);
   return (
