@@ -6,7 +6,8 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
-import { Info, Gauge, Settings2, TrendingUp, BarChart3, PieChart as PieIcon, Zap, Droplets, ShieldCheck, SlidersHorizontal, AlertTriangle } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
+import { Info, Settings2, PieChart as PieIcon, SlidersHorizontal, ShieldAlert } from "lucide-react";
 import {
   PieChart,
   Pie,
@@ -21,7 +22,7 @@ import {
   Legend,
 } from "recharts";
 
-// ================= Brand Palette (single source of truth) =================
+// ================= Brand Palette =================
 const BRAND = {
   ORANGE: "#FF6A39",
   YELLOW_ORANGE: "#E09A41",
@@ -32,56 +33,85 @@ const BRAND = {
   TEAL: "#72CAC3",
   PURPLE: "#52266F",
 };
-// Charts/slices
-const LAND_COLORS = [BRAND.MIDNIGHT, BRAND.ORANGE, BRAND.TEAL, BRAND.PURPLE, BRAND.SLATE];
-const MIX_COLORS = [BRAND.ORANGE, BRAND.MIDNIGHT, BRAND.TEAL, BRAND.PURPLE, BRAND.YELLOW_ORANGE, BRAND.SMOKE, BRAND.SLATE, "#8F8F8F", "#C7D3E3", "#F3BDAA"];
+const LAND_COLORS = [BRAND.MIDNIGHT, BRAND.ORANGE, BRAND.TEAL, BRAND.PURPLE, BRAND.YELLOW_ORANGE, BRAND.SLATE];
+const MIX_COLORS = [
+  BRAND.ORANGE,
+  BRAND.MIDNIGHT,
+  BRAND.TEAL,
+  BRAND.PURPLE,
+  BRAND.YELLOW_ORANGE,
+  BRAND.SMOKE,
+  BRAND.SLATE,
+  "#8F8F8F",
+  "#C7D3E3",
+  "#F3BDAA",
+];
+
+// ================= Defaults =================
+const DEFAULT_GENLAND = {
+  Grid: { per_unit_acres: 0 },
+  "Recip (NG)": { per_unit_acres: 0.7 }, // per 18 MW engine (~0.04 ac/MW)
+  SCGT: { per_unit_acres: 2.0 }, // per 57 MW unit (~0.035 ac/MW)
+  "CCGT (5000F 1x1)": { per_unit_acres: 12.0 }, // per 373 MW block (~0.032 ac/MW)
+  "Fuel Cells (SOFC)": { per_unit_acres: 0.2 }, // 10 MW block (~0.02 ac/MW)
+  PV: { per_MW_acres: 6.5 }, // total site spacing
+  Wind: { per_MW_acres: 40 }, // spacing; disturbed is much smaller
+  BESS: { per_MW_hr: 0.0075, site_overhead_acres: 0.5 }, // duration-based: ac/MW = 0.0075*hours + site overhead
+};
+
+const DEFAULT_INPUTS = {
+  // Land & design
+  mode: "target", // target vs land
+  parcelAcres: 500,
+  buildablePct: 30, // % of parcel
+  siteCoveragePct: 50, // building footprint as % of buildable
+  stories: 1, // stacked floors
+  supportPct: 35, // of building sqft
+  mepYardPct: 15,
+  roadsPct: 10,
+  substationAcres: 2.0,
+  sqftPerRack: 60,
+  rackDensityKw: 10,
+  // Cooling & efficiency
+  cooling: "Air", // Air | Liquid
+  pue: 1.35,
+  wue_L_per_kWh: 0.3,
+  // Phasing
+  targetItMw: 100,
+  phases: 3,
+  equalizePhases: true,
+  phaseItMw: [33.3, 33.3, 33.3],
+  // Power & reliability
+  reliability: "99.9", // 99.9 | 99.99 | 99.999
+  mixMode: "share", // share | manual
+  genSizeToFacility: true, // size generation to facility (IT * PUE)
+  // Renewables
+  pvPanelWatt: 550,
+  // Land db for generation
+  genLand: DEFAULT_GENLAND,
+};
 
 // --- Helpers ---
-function toNumber(v, fallback = 0) {
+function toNumber(v: any, fallback = 0) {
   const n = typeof v === "number" ? v : parseFloat(String(v).replace(/,/g, ""));
   return Number.isFinite(n) ? n : fallback;
 }
-function acresToSqft(acres) { return acres * 43560; }
-function galPerHourToGpm(gph) { return gph / 60; }
-function litersToGallons(l) { return l / 3.78541; }
+function acresToSqft(acres: number) { return acres * 43560; }
+function galPerHourToGpm(gph: number) { return gph / 60; }
+function litersToGallons(l: number) { return l / 3.78541; }
 
 const BTU_PER_SCF = 1037; // natural gas ~Btu/scf (HHV, approx)
-
-// Persist simple UI state
-const LS_KEY = "dc-feasibility-v3";
+const LS_KEY = "dc-feasibility-v4";
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
 export default function DataCenterFeasibilityTool() {
   const [inputs, setInputs] = useState(() => {
     const saved = typeof window !== "undefined" ? window.localStorage.getItem(LS_KEY) : null;
-    const DEFAULTS = {
-      mode: "target",
-      parcelAcres: 500,
-      buildablePct: 30,
-      siteCoveragePct: 50,
-      stories: 1,
-      supportPct: 35,
-      mepYardPct: 15,
-      roadsPct: 10,
-      substationAcres: 2.0,
-      sqftPerRack: 60,
-      rackDensityKw: 10,
-      cooling: "Air",
-      pue: 1.35,
-      wue_L_per_kWh: 0.30,
-      targetItMw: 100,
-      phases: 3,
-      equalizePhases: true,
-      phaseItMw: [33.3, 33.3, 33.3],
-      reliability: "99.9",
-      mixMode: "share",
-      genSizeToFacility: true,
-      pvPanelWatt: 550,
-    };
-    return saved ? { ...DEFAULTS, ...JSON.parse(saved) } : DEFAULTS;
+    return saved ? { ...DEFAULT_INPUTS, ...JSON.parse(saved) } : DEFAULT_INPUTS;
   });
 
-  const MIX_LIBRARY = {
+  // Library of representative blocks
+  const MIX_LIBRARY: Record<string, any> = {
     Grid: { tech: "Grid", unitMW: 100, unitAvailability: 0.9995, heatRate: 0, water_gal_per_MWh: 0, isFirm: true, fuel: "None" },
     "Recip (NG)": { tech: "Recip (NG)", unitMW: 18, unitAvailability: 0.985, heatRate: 8924, water_gal_per_MWh: 1, isFirm: true, fuel: "NG" },
     SCGT: { tech: "SCGT", unitMW: 57, unitAvailability: 0.992, heatRate: 10999, water_gal_per_MWh: 0, isFirm: true, fuel: "NG" },
@@ -101,31 +131,26 @@ export default function DataCenterFeasibilityTool() {
     { id: uid(), tech: "Wind", units: 0, ...MIX_LIBRARY["Wind"] },
   ]);
 
-  // Share-mode sliders (STRICT: default everything to 0%)
+  // Share-mode sliders (default 0%)
   const firmList = ["Grid", "Recip (NG)", "SCGT", "CCGT (5000F 1x1)", "Fuel Cells (SOFC)"];
   const nonFirmList = ["PV", "Wind", "BESS"];
-  const [shares, setShares] = useState({
-    Grid: 0, "Recip (NG)": 0, SCGT: 0, "CCGT (5000F 1x1)": 0, "Fuel Cells (SOFC)": 0,
-    PV: 0, Wind: 0, BESS: 0,
-  });
-
-  // Accredited capacity (ELCC) sliders for PV/Wind/BESS
+  const [shares, setShares] = useState({ Grid: 0, "Recip (NG)": 0, SCGT: 0, "CCGT (5000F 1x1)": 0, "Fuel Cells (SOFC)": 0, PV: 0, Wind: 0, BESS: 0 });
   const [elcc, setElcc] = useState({ ...DEFAULT_ELCC });
   const [bessHours, setBessHours] = useState(4);
   const [elccEnabled, setElccEnabled] = useState(true);
 
-  // Which density preset is active? (for button highlighting)
+  // Preset highlighting
   const preset = useMemo(() => {
-    const s = inputs.sqftPerRack; const sup = inputs.supportPct;
-    if (Math.abs(s - 30) < 0.5 && Math.abs(sup - 35) < 0.5) return 'aggr';
-    if (Math.abs(s - 45) < 0.5 && Math.abs(sup - 40) < 0.5) return 'typ';
-    if (Math.abs(s - 60) < 0.5 && Math.abs(sup - 45) < 0.5) return 'cons';
-    return 'custom';
+    const s = inputs.sqftPerRack, sup = inputs.supportPct;
+    if (Math.abs(s - 30) < 0.5 && Math.abs(sup - 35) < 0.5) return "aggr";
+    if (Math.abs(s - 45) < 0.5 && Math.abs(sup - 40) < 0.5) return "typ";
+    if (Math.abs(s - 60) < 0.5 && Math.abs(sup - 45) < 0.5) return "cons";
+    return "custom";
   }, [inputs.sqftPerRack, inputs.supportPct]);
 
-  // keep phase array length in sync
+  // Sync phase length
   useEffect(() => {
-    setInputs((s) => {
+    setInputs((s: any) => {
       const phases = Math.max(1, Math.floor(s.phases));
       const arr = s.phaseItMw.slice(0, phases);
       while (arr.length < phases) arr.push((s.mode === "target" ? s.targetItMw : Math.max(0, s.targetItMw)) / phases);
@@ -133,13 +158,15 @@ export default function DataCenterFeasibilityTool() {
     });
   }, [inputs.phases]);
 
-  // Suggest WUE on cooling change (user can override)
+  // Suggest WUE on cooling change
   useEffect(() => {
-    setInputs((s) => ({ ...s, wue_L_per_kWh: s.cooling === "Liquid" ? 0.15 : 0.30 }));
+    setInputs((s: any) => ({ ...s, wue_L_per_kWh: s.cooling === "Liquid" ? 0.15 : 0.3 }));
   }, [inputs.cooling]);
 
-  // save persistent subset
-  useEffect(() => { if (typeof window !== "undefined") window.localStorage.setItem(LS_KEY, JSON.stringify(inputs)); }, [inputs]);
+  // Persist
+  useEffect(() => {
+    if (typeof window !== "undefined") window.localStorage.setItem(LS_KEY, JSON.stringify(inputs));
+  }, [inputs]);
 
   // =================== Land/IT Calculation ===================
   const calc = useMemo(() => {
@@ -175,20 +202,20 @@ export default function DataCenterFeasibilityTool() {
     const feasible = inputs.mode === "target" ? siteMaxItMw >= targetItMw : siteMaxItMw > 0;
 
     let phases = Math.max(1, Math.floor(inputs.phases));
-    let phaseValues = [];
+    let phaseValues: number[] = [] as any;
     if (inputs.equalizePhases) {
       const total = inputs.mode === "target" ? targetItMw : siteMaxItMw;
       const per = total / phases;
       for (let i = 0; i < phases; i++) phaseValues.push(per);
     } else {
-      phaseValues = inputs.phaseItMw.slice(0, phases).map((v) => Math.max(0, v));
+      phaseValues = inputs.phaseItMw.slice(0, phases).map((v: number) => Math.max(0, v));
     }
-    const manualSum = phaseValues.reduce((a, b) => a + b, 0);
+    const manualSum = phaseValues.reduce((a: number, b: number) => a + b, 0);
     const effectiveTargetItMw = inputs.equalizePhases ? targetItMw : manualSum;
 
-    const it_kW = (inputs.mode === "target" ? effectiveTargetItMw : siteMaxItMw) * 1000;
+    const it_kW = (inputs.mode === "target" ? effectiveTargetItMw : siteMaxItMw) * 1000; // kWh/h = kW
     const wue_L_per_kWh = Math.max(0, inputs.wue_L_per_kWh);
-    const water_L_per_h_dc = wue_L_per_kWh * it_kW; // kWh per hour = kW
+    const water_L_per_h_dc = wue_L_per_kWh * it_kW;
     const water_gpm_dc = galPerHourToGpm(litersToGallons(water_L_per_h_dc));
 
     return {
@@ -217,104 +244,102 @@ export default function DataCenterFeasibilityTool() {
   }, [inputs]);
 
   // =============== Reliability + Mix =================
-  function kFromReliability(r) { return r === "99.9" ? 1 : r === "99.99" ? 2 : 3; }
+  function kFromReliability(r: string) { return r === "99.9" ? 1 : r === "99.99" ? 2 : 3; }
 
-  // Manual-mix calculations (units entered by user)
+  // Manual-mix calculations
   const manualMixCalc = useMemo(() => {
     if (inputs.mixMode !== "manual") return null;
-    const reqMW = inputs.genSizeToFacility ? (calc.effectiveTargetItMw * calc.pue) : calc.effectiveTargetItMw;
+    const reqMW = inputs.genSizeToFacility ? calc.effectiveTargetItMw * calc.pue : calc.effectiveTargetItMw;
     const kLoss = kFromReliability(inputs.reliability);
 
     const firmRows = mix.filter((r) => r.isFirm && r.units > 0);
-    const firmUnits = [];
     let totalInstalledFirm = 0;
+    const unitList: { tech: string; size: number }[] = [] as any;
     firmRows.forEach((r) => {
-      totalInstalledFirm += r.units * r.unitMW;
-      for (let i = 0; i < Math.floor(r.units); i++) firmUnits.push(r.unitMW);
+      const installed = r.units * r.unitMW;
+      totalInstalledFirm += installed;
+      for (let i = 0; i < Math.floor(r.units); i++) unitList.push({ tech: r.tech, size: r.unitMW });
     });
-
-    const sorted = firmUnits.sort((a, b) => b - a);
-    const worstLoss = sorted.slice(0, Math.min(kLoss, sorted.length)).reduce((a, b) => a + b, 0);
+    const sortedUnits = unitList.slice().sort((a, b) => b.size - a.size);
+    const dropList = sortedUnits.slice(0, Math.min(kLoss, sortedUnits.length));
+    const worstLoss = dropList.reduce((a, b) => a + b.size, 0);
     const firmAfterLoss = Math.max(0, totalInstalledFirm - worstLoss);
 
-    const pv = mix.find((r) => r.tech === "PV");
-    const wind = mix.find((r) => r.tech === "Wind");
-    const bess = mix.find((r) => r.tech === "BESS");
-    const pvMW = (pv?.units ?? 0) * (pv?.unitMW ?? 0);
-    const windMW = (wind?.units ?? 0) * (wind?.unitMW ?? 0);
-    const bessMW = (bess?.units ?? 0) * (bess?.unitMW ?? 0);
+    const rowBy = (t: string) => mix.find((r) => r.tech === t);
+    const pvMW = (rowBy("PV")?.units ?? 0) * (rowBy("PV")?.unitMW ?? 0);
+    const windMW = (rowBy("Wind")?.units ?? 0) * (rowBy("Wind")?.unitMW ?? 0);
+    const bessMW = (rowBy("BESS")?.units ?? 0) * (rowBy("BESS")?.unitMW ?? 0);
 
     const bessCredit = Math.min(100, Math.max(0, elcc.BESS)) * Math.min(1, Math.max(0, bessHours / 4));
-    const accredited = elccEnabled ? (pvMW * (Math.max(0, elcc.PV) / 100) + windMW * (Math.max(0, elcc.Wind) / 100) + bessMW * (bessCredit / 100)) : 0;
+    const accredited = elccEnabled ? pvMW * (Math.max(0, elcc.PV) / 100) + windMW * (Math.max(0, elcc.Wind) / 100) + bessMW * (bessCredit / 100) : 0;
 
-    const meets = (firmAfterLoss + accredited) >= reqMW;
+    const meets = firmAfterLoss + accredited >= reqMW;
 
-    const firmInstalledByRow = firmRows.map((r) => ({ id: r.id, mw: r.units * r.unitMW }));
-    const totalFirmInstalled = firmInstalledByRow.reduce((a, b) => a + b.mw, 0);
-    const dispatchByRow = new Map();
-    firmRows.forEach((r) => {
-      const share = totalFirmInstalled > 0 ? (r.units * r.unitMW) / totalFirmInstalled : 0;
-      dispatchByRow.set(r.id, share * reqMW);
-    });
+    const compFirm = firmRows.map((r) => ({ name: r.tech, installed: r.units * r.unitMW, units: r.units, isFirm: true }));
+    const totalFirmInstalled = compFirm.reduce((a, b) => a + b.installed, 0);
+    const dispatchTotal = Math.min(reqMW, totalFirmInstalled);
+    const compFirmWithDispatch = compFirm.map((row) => ({ ...row, dispatched: totalFirmInstalled > 0 ? (row.installed / totalFirmInstalled) * dispatchTotal : 0 }));
 
-    let fuel_MMBtu_per_h = 0; let gas_MSCF_per_h = 0; let genWater_gpm = 0;
-    firmRows.forEach((r) => {
-      if (r.fuel !== "None" && r.heatRate > 0) {
-        const mw = dispatchByRow.get(r.id) ?? 0;
-        const mmbtu_h = (mw * 1000 * r.heatRate) / 1_000_000;
+    const compNonFirm = [
+      { name: "PV (non-firm)", installed: pvMW, dispatched: 0, units: rowBy("PV")?.units ?? 0, isFirm: false },
+      { name: "Wind (non-firm)", installed: windMW, dispatched: 0, units: rowBy("Wind")?.units ?? 0, isFirm: false },
+      { name: "BESS (non-firm)", installed: bessMW, dispatched: 0, units: rowBy("BESS")?.units ?? 0, isFirm: false },
+    ];
+
+    // generation water/fuel (proportional across firm techs only)
+    let fuel_MMBtu_per_h = 0, gas_MSCF_per_h = 0, genWater_gpm = 0;
+    compFirmWithDispatch.forEach((row) => {
+      const lib = (MIX_LIBRARY as any)[row.name];
+      if (lib && lib.fuel !== "None" && lib.heatRate > 0) {
+        const mw = (row.installed / Math.max(1, totalFirmInstalled)) * reqMW;
+        const mmbtu_h = (mw * 1000 * lib.heatRate) / 1_000_000;
         fuel_MMBtu_per_h += mmbtu_h;
         gas_MSCF_per_h += (mmbtu_h * 1_000_000) / BTU_PER_SCF / 1000;
-        genWater_gpm += galPerHourToGpm(r.water_gal_per_MWh * mw);
+        genWater_gpm += galPerHourToGpm(lib.water_gal_per_MWh * mw);
       }
     });
 
-    const comp = mix.map((r) => ({ name: r.tech, installed: r.units * r.unitMW, dispatched: r.isFirm ? (dispatchByRow.get(r.id) ?? 0) : 0, units: r.units, isFirm: r.isFirm }));
-
-    return { reqMW, kLoss, totalInstalledFirm, firmAfterLoss, accredited, meets, comp, fuel_MMBtu_per_h, gas_MSCF_per_h, genWater_gpm, totalWater_gpm: genWater_gpm + calc.water_gpm_dc, pvMW, windMW, bessMW };
+    return { reqMW, kLoss, totalInstalledFirm, firmAfterLoss, accredited, meets, comp: compFirmWithDispatch.concat(compNonFirm), fuel_MMBtu_per_h, gas_MSCF_per_h, genWater_gpm, totalWater_gpm: genWater_gpm + calc.water_gpm_dc, pvMW, windMW, bessMW, dropList };
   }, [inputs.mixMode, mix, inputs, calc.effectiveTargetItMw, calc.pue, calc.water_gpm_dc, elcc, bessHours, elccEnabled]);
 
-  // Share-mode calculations (STRICT sliders: no hidden fallback)
+  // Share-mode calculations
   const shareCalc = useMemo(() => {
     if (inputs.mixMode !== "share") return null;
-    const reqMW = inputs.genSizeToFacility ? (calc.effectiveTargetItMw * calc.pue) : calc.effectiveTargetItMw;
+    const reqMW = inputs.genSizeToFacility ? calc.effectiveTargetItMw * calc.pue : calc.effectiveTargetItMw;
     const kLoss = kFromReliability(inputs.reliability);
 
     const firmShares = firmList.map((t) => ({ t, pct: Math.max(0, shares[t] || 0) }));
     const sumFirm = firmShares.reduce((a, b) => a + b.pct, 0);
 
-    const units = { Grid: 0, "Recip (NG)": 0, SCGT: 0, "CCGT (5000F 1x1)": 0, "Fuel Cells (SOFC)": 0, PV: 0, Wind: 0, BESS: 0 };
+    const units: Record<string, number> = { Grid: 0, "Recip (NG)": 0, SCGT: 0, "CCGT (5000F 1x1)": 0, "Fuel Cells (SOFC)": 0, PV: 0, Wind: 0, BESS: 0 };
 
-    function evaluate(unitsMap) {
-      const unitList = [];
+    function evaluate(unitsMap: Record<string, number>) {
+      const unitTags: { tech: string; size: number }[] = [] as any;
       let installed = 0;
       firmList.forEach((t) => {
         const n = Math.max(0, Math.floor(unitsMap[t] || 0));
         const size = MIX_LIBRARY[t].unitMW;
         installed += n * size;
-        for (let i = 0; i < n; i++) unitList.push(size);
+        for (let i = 0; i < n; i++) unitTags.push({ tech: t, size });
       });
-      const sorted = unitList.sort((a, b) => b - a);
-      const lost = sorted.slice(0, Math.min(kLoss, sorted.length)).reduce((a, b) => a + b, 0);
+      const sorted = unitTags.sort((a, b) => b.size - a.size);
+      const lostArr = sorted.slice(0, Math.min(kLoss, sorted.length));
+      const lost = lostArr.reduce((a, b) => a + b.size, 0);
       const firmAfterLoss = Math.max(0, installed - lost);
-      return { installed, firmAfterLoss };
+      return { installed, firmAfterLoss, dropList: lostArr };
     }
 
-    let firmAfterLoss = 0;
+    let firmAfterLoss = 0; let dropList: { tech: string; size: number }[] = [] as any;
     if (sumFirm > 0) {
-      const normShares = firmShares.map(({ t, pct }) => ({ t, f: pct / sumFirm }));
-      // initial units from target dispatched per firm tech
+      const normShares = firmShares.filter(({ pct }) => pct > 0).map(({ t, pct }) => ({ t, f: pct / sumFirm }));
       normShares.forEach(({ t, f }) => {
-        const u = MIX_LIBRARY[t].unitMW;
-        const targetMW = f * reqMW;
-        units[t] = Math.max(0, Math.ceil(targetMW / Math.max(1e-6, u)));
+        const u = MIX_LIBRARY[t].unitMW; const targetMW = f * reqMW; units[t] = Math.max(0, Math.ceil(targetMW / Math.max(1e-6, u)));
       });
-      // add units until N+k satisfied
       let guard = 0; const MAX = 500;
       while (guard++ < MAX) {
-        const { firmAfterLoss: current } = evaluate(units);
-        if (current >= reqMW) { firmAfterLoss = current; break; }
-        let bestT = normShares[0]?.t || "Grid";
-        let bestScore = -Infinity;
+        const res = evaluate(units);
+        if (res.firmAfterLoss >= reqMW) { firmAfterLoss = res.firmAfterLoss; dropList = res.dropList; break; }
+        let bestT = normShares[0]?.t || "Grid"; let bestScore = -Infinity;
         normShares.forEach(({ t, f }) => {
           const size = MIX_LIBRARY[t].unitMW;
           const dispatchTarget = f * reqMW;
@@ -325,51 +350,38 @@ export default function DataCenterFeasibilityTool() {
         });
         units[bestT] = (units[bestT] || 0) + 1;
       }
-      if (firmAfterLoss === 0) firmAfterLoss = evaluate(units).firmAfterLoss;
-    } else {
-      // sumFirm === 0 → no firm capacity installed
-      firmAfterLoss = 0;
-    }
+      if (firmAfterLoss === 0) { const res = evaluate(units); firmAfterLoss = res.firmAfterLoss; dropList = res.dropList; }
+    } else { firmAfterLoss = 0; }
 
-    // Non‑firm nameplate from sliders (% of required MW)
+    // Non-firm nameplate from sliders (% of required MW)
     const pvMW = (Math.max(0, shares.PV || 0) / 100) * reqMW;
     const windMW = (Math.max(0, shares.Wind || 0) / 100) * reqMW;
-    const bessMW = (Math.max(0, shares.BESS || 0) / 100) * reqMW; // power rating only
+    const bessMW = (Math.max(0, shares.BESS || 0) / 100) * reqMW;
 
     const pvUnits = Math.ceil(pvMW / MIX_LIBRARY.PV.unitMW);
     const windUnits = Math.ceil(windMW / MIX_LIBRARY.Wind.unitMW);
     const bessUnits = Math.ceil(bessMW / MIX_LIBRARY.BESS.unitMW);
 
     const bessCredit = Math.min(100, Math.max(0, elcc.BESS)) * Math.min(1, Math.max(0, bessHours / 4));
-    const accredited = elccEnabled ? (pvMW * (Math.max(0, elcc.PV) / 100) + windMW * (Math.max(0, elcc.Wind) / 100) + bessMW * (bessCredit / 100)) : 0;
+    const accredited = elccEnabled ? pvMW * (Math.max(0, elcc.PV) / 100) + windMW * (Math.max(0, elcc.Wind) / 100) + bessMW * (bessCredit / 100) : 0;
 
-    const compFirmRaw = firmList
-      .map((t) => ({ t, mw: (units[t] || 0) * MIX_LIBRARY[t].unitMW }))
-      .filter((x) => x.mw > 0);
-    const totalFirmInstalled = compFirmRaw.reduce((a,b)=>a+b.mw,0);
+    const compFirmRaw = firmList.map((t) => ({ t, mw: (units[t] || 0) * MIX_LIBRARY[t].unitMW })).filter((x) => x.mw > 0);
+    const totalFirmInstalled = compFirmRaw.reduce((a, b) => a + b.mw, 0);
     const dispatchTotal = Math.min(reqMW, totalFirmInstalled);
-    const compFirm = compFirmRaw.map(({ t, mw }) => ({
-      name: t,
-      installed: mw,
-      dispatched: totalFirmInstalled > 0 ? (mw / totalFirmInstalled) * dispatchTotal : 0,
-      units: units[t] || 0,
-      isFirm: true,
-    }));
+    const compFirm = compFirmRaw.map(({ t, mw }) => ({ name: t, installed: mw, dispatched: totalFirmInstalled > 0 ? (mw / totalFirmInstalled) * dispatchTotal : 0, units: units[t] || 0, isFirm: true }));
 
     const compNonFirm = [
-      { name: 'PV (non‑firm)', installed: pvMW, dispatched: 0, units: pvUnits, isFirm: false },
-      { name: 'Wind (non‑firm)', installed: windMW, dispatched: 0, units: windUnits, isFirm: false },
-      { name: 'BESS (non‑firm)', installed: bessMW, dispatched: 0, units: bessUnits, isFirm: false },
+      { name: "PV (non-firm)", installed: pvMW, dispatched: 0, units: pvUnits, isFirm: false },
+      { name: "Wind (non-firm)", installed: windMW, dispatched: 0, units: windUnits, isFirm: false },
+      { name: "BESS (non-firm)", installed: bessMW, dispatched: 0, units: bessUnits, isFirm: false },
     ];
 
-    const meets = (firmAfterLoss + accredited) >= reqMW;
-
-    // generation water/fuel (proportional across firm techs only)
-    let fuel_MMBtu_per_h = 0; let gas_MSCF_per_h = 0; let genWater_gpm = 0;
+    let fuel_MMBtu_per_h = 0, gas_MSCF_per_h = 0, genWater_gpm = 0;
+    const totalFirmForDispatch = compFirm.reduce((a, b) => a + b.installed, 0);
     compFirm.forEach((row) => {
-      const lib = MIX_LIBRARY[row.name] || MIX_LIBRARY[row.t] || null;
+      const lib = (MIX_LIBRARY as any)[row.name] || (MIX_LIBRARY as any)[(row as any).t] || null;
       if (lib && lib.fuel !== "None" && lib.heatRate > 0) {
-        const mw = (row.installed / Math.max(1, compFirm.reduce((a,b)=>a+b.installed,0))) * reqMW;
+        const mw = (row.installed / Math.max(1, totalFirmForDispatch)) * reqMW;
         const mmbtu_h = (mw * 1000 * lib.heatRate) / 1_000_000;
         fuel_MMBtu_per_h += mmbtu_h;
         gas_MSCF_per_h += (mmbtu_h * 1_000_000) / BTU_PER_SCF / 1000;
@@ -377,760 +389,638 @@ export default function DataCenterFeasibilityTool() {
       }
     });
 
-    return {
-      reqMW, kLoss, units,
-      comp: compFirm.concat(compNonFirm),
-      fuel_MMBtu_per_h,
-      gas_MSCF_per_h,
-      genWater_gpm,
-      pvMW, windMW, bessMW,
-      pvUnits, windUnits,
-      accredited,
-      totalWater_gpm: genWater_gpm + calc.water_gpm_dc,
-      firmAfterLoss,
-      meets,
-      sumFirm,
-    };
+    const meets = firmAfterLoss + accredited >= reqMW;
+
+    return { reqMW, kLoss, units, comp: compFirm.concat(compNonFirm), fuel_MMBtu_per_h, gas_MSCF_per_h, genWater_gpm, pvMW, windMW, bessMW, pvUnits, windUnits, accredited, totalWater_gpm: genWater_gpm + calc.water_gpm_dc, firmAfterLoss, meets, sumFirm, dropList };
   }, [inputs.mixMode, shares, inputs.reliability, inputs.genSizeToFacility, calc.effectiveTargetItMw, calc.pue, calc.water_gpm_dc, elcc, bessHours, elccEnabled]);
 
+  const activeCalc = inputs.mixMode === "share" ? shareCalc : manualMixCalc;
+
+  // ======= Derived: Generation footprint =======
+  const genFootprint = useMemo(() => {
+    const comp = activeCalc?.comp || [];
+    const rows: { name: string; acres: number; installed: number; units: number }[] = [] as any;
+    let total = 0;
+    function baseName(n: string) { return String(n || "").replace(/ \(non-firm\)/g, ""); }
+    comp.forEach((d: any) => {
+      const name = baseName(d.name);
+      const cfg: any = (inputs.genLand || {})[name] || {};
+      let acres = 0;
+      if (typeof cfg.per_unit_acres === "number") {
+        acres = (d.units || 0) * cfg.per_unit_acres;
+      } else if (typeof cfg.per_MW_hr === "number") {
+        const slope = cfg.per_MW_hr;
+        if ((d.installed || 0) > 0) {
+          acres = (d.installed || 0) * slope * Math.max(1, bessHours) + (cfg.site_overhead_acres || 0);
+        }
+      } else if (typeof cfg.per_MW_acres === "number") {
+        acres = (d.installed || 0) * cfg.per_MW_acres;
+      }
+      if (acres > 0.0001) { rows.push({ name, acres, installed: d.installed || 0, units: d.units || 0 }); total += acres; }
+    });
+    return { rows, total };
+  }, [activeCalc, inputs.genLand, bessHours]);
+
+  // ======= Land pie data =======
+  const landPieData = useMemo(() => {
+    const data = [
+      { name: "Building", value: calc.buildingFootprintAcres },
+      { name: "MEP Yard", value: calc.mepYardAcres },
+      { name: "Substation", value: calc.substationAcres },
+      { name: "Roads/Parking", value: calc.roadsAcres },
+      { name: "Generation (power)", value: genFootprint?.total || 0 },
+      { name: "Open/Other", value: Math.max(0, calc.openAcres - (genFootprint?.total || 0)) },
+    ];
+    return data.filter((d) => d.value > 0.0001);
+  }, [calc.buildingFootprintAcres, calc.mepYardAcres, calc.substationAcres, calc.roadsAcres, calc.openAcres, genFootprint?.total]);
+
   // Manual-mix helpers
-  function addRow() { setMix((m) => [...m, { id: uid(), tech: "SCGT", units: 1, ...MIX_LIBRARY["SCGT"] }]); }
-  function removeRow(id) { setMix((m) => m.filter((r) => r.id !== id)); }
-  function updateRow(id, patch) { setMix((m) => m.map((r) => (r.id === id ? { ...r, ...patch } : r))); }
-  function onChangeTech(id, tech) {
-    const lib = MIX_LIBRARY[tech];
-    updateRow(id, { tech, unitMW: lib.unitMW, unitAvailability: lib.unitAvailability, heatRate: lib.heatRate, water_gal_per_MWh: lib.water_gal_per_MWh, isFirm: lib.isFirm, fuel: lib.fuel });
+  function addRow() { setMix((m: any[]) => [...m, { id: uid(), tech: "SCGT", units: 1, ...MIX_LIBRARY["SCGT"] }]); }
+  function removeRow(id: string) { setMix((m: any[]) => m.filter((r) => r.id !== id)); }
+  function updateRow(id: string, patch: any) { setMix((m: any[]) => m.map((r) => (r.id === id ? { ...r, ...patch } : r))); }
+  function onChangeTech(id: string, tech: string) { const lib = MIX_LIBRARY[tech]; updateRow(id, { tech, unitMW: lib.unitMW, unitAvailability: lib.unitAvailability, heatRate: lib.heatRate, water_gal_per_MWh: lib.water_gal_per_MWh, isFirm: lib.isFirm, fuel: lib.fuel }); }
+
+  function resetAll() {
+    if (typeof window !== "undefined") window.localStorage.removeItem(LS_KEY);
+    setInputs({ ...DEFAULT_INPUTS });
+    setShares({ Grid: 0, "Recip (NG)": 0, SCGT: 0, "CCGT (5000F 1x1)": 0, "Fuel Cells (SOFC)": 0, PV: 0, Wind: 0, BESS: 0 });
+    setElcc({ ...DEFAULT_ELCC });
+    setBessHours(4);
+    setElccEnabled(true);
+    setMix([
+      { id: uid(), tech: "CCGT (5000F 1x1)", units: 1, ...MIX_LIBRARY["CCGT (5000F 1x1)"] },
+      { id: uid(), tech: "PV", units: 0, ...MIX_LIBRARY["PV"] },
+      { id: uid(), tech: "Wind", units: 0, ...MIX_LIBRARY["Wind"] },
+    ]);
   }
 
-  const sumFirmShares = useMemo(() => firmList.reduce((a,t)=> a + Math.max(0, shares[t]||0), 0), [shares]);
+  const sumFirmShares = useMemo(() => firmList.reduce((a, t) => a + Math.max(0, shares[t] || 0), 0), [shares]);
+
+  // ======= Derived visuals =======
+  const mixPieData = useMemo(() => {
+    const comp = activeCalc?.comp || [];
+    return comp.filter((d: any) => (d.installed || 0) > 0).map((d: any) => ({ name: d.name, value: d.installed }));
+  }, [activeCalc]);
+
+  const phaseSeries = useMemo(() => calc.phaseValues.map((v: number, i: number) => ({ name: `P${i + 1}`, it: v })), [calc.phaseValues]);
 
   // =============== UI ===============
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-3xl font-semibold">Data Center Feasibility Tool — Js Rewrite (v0)</h1>
-          <p className="text-muted-foreground mt-1">Strict firm sliders (0% means 0 capacity). ELCC can accredit a portion of PV/Wind/BESS toward the reliability check. Dispatch is carried by firm pro‑rata up to required facility MW.</p>
+          <h1 className="text-3xl font-semibold">Data Center Feasibility Tool — Js Rewrite (restored)</h1>
+          <p className="text-muted-foreground mt-1">Restored: IT/Facility overview, Phasing chart, non-firm tint, mix pie, and Reliability Event (N+k drop). Land pie includes generation footprint; brand palette applied.</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={resetAll}>Reset to defaults</Button>
           <Settings2 className="h-5 w-5" />
-          <span className="text-sm text-muted-foreground">Prototype · v0.9</span>
+          <span className="text-sm text-muted-foreground">Prototype · v1.3</span>
         </div>
       </div>
 
-      <Tabs defaultValue="inputs" className="w-full">
+      <Tabs defaultValue="results" className="w-full">
         <TabsList className="grid grid-cols-4 w-full">
           <TabsTrigger value="inputs">Inputs</TabsTrigger>
-          <TabsTrigger value="results">Results</TabsTrigger>
           <TabsTrigger value="powermix">Power & Mix</TabsTrigger>
+          <TabsTrigger value="results">Results</TabsTrigger>
           <TabsTrigger value="assumptions">Assumptions</TabsTrigger>
         </TabsList>
 
         {/* Assumptions */}
-        <TabsContent value="assumptions" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Design & Land‑Use Assumptions</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm text-muted-foreground space-y-1">
-              <ul className="list-disc ml-5 space-y-1">
-                <li><strong>Parcel & land</strong>: Inputs include Parcel (ac), Buildable %, Site Coverage %, MEP Yard %, Roads/Parking %, and fixed Substation acres.</li>
-                <li><strong>Stories</strong>: Stacked floors multiply total building ft² (and white space) without increasing footprint.</li>
-                <li><strong>White space</strong>: Building ft² × (1 − Support %) → White space; Racks = White space ÷ ft²/rack.</li>
-                <li><strong>IT MW from land</strong>: Racks × (kW/rack) ÷ 1000.</li>
-                <li><strong>Phasing</strong>: Equalized across phases by default; or enter per‑phase IT MW manually.</li>
+        <TabsContent value="assumptions">
+          <Card className="mb-4">
+            <CardHeader><CardTitle>Generation Footprint Assumptions (ac)</CardTitle></CardHeader>
+            <CardContent>
+              <div className="grid md:grid-cols-2 gap-4">
+                {["Recip (NG)", "SCGT", "CCGT (5000F 1x1)", "Fuel Cells (SOFC)"].map((k) => (
+                  <div key={k}>
+                    <Label className="text-sm">{k} — acres / unit</Label>
+                    <Input type="number" step={0.1} value={(inputs.genLand as any)[k].per_unit_acres} onChange={(e) => setInputs((s: any) => ({ ...s, genLand: { ...s.genLand, [k]: { ...s.genLand[k], per_unit_acres: parseFloat(e.target.value || "0") } } }))} />
+                  </div>
+                ))}
+                <div>
+                  <Label className="text-sm">PV — acres / MW</Label>
+                  <Input type="number" step={0.1} value={inputs.genLand.PV.per_MW_acres} onChange={(e) => setInputs((s: any) => ({ ...s, genLand: { ...s.genLand, PV: { ...s.genLand.PV, per_MW_acres: parseFloat(e.target.value || "0") } } }))} />
+                </div>
+                <div>
+                  <Label className="text-sm">Wind — acres / MW (spacing)</Label>
+                  <Input type="number" step={0.1} value={inputs.genLand.Wind.per_MW_acres} onChange={(e) => setInputs((s: any) => ({ ...s, genLand: { ...s.genLand, Wind: { ...s.genLand.Wind, per_MW_acres: parseFloat(e.target.value || "0") } } }))} />
+                </div>
+                <div>
+                  <Label className="text-sm">BESS — ac/MW per hour</Label>
+                  <Input type="number" step={0.001} value={inputs.genLand.BESS.per_MW_hr ?? 0} onChange={(e) => setInputs((s: any) => ({ ...s, genLand: { ...s.genLand, BESS: { ...s.genLand.BESS, per_MW_hr: parseFloat(e.target.value || "0") } } }))} />
+                </div>
+                <div>
+                  <Label className="text-sm">BESS site overhead (ac)</Label>
+                  <Input type="number" step={0.1} value={inputs.genLand.BESS.site_overhead_acres ?? 0} onChange={(e) => setInputs((s: any) => ({ ...s, genLand: { ...s.genLand, BESS: { ...s.genLand.BESS, site_overhead_acres: parseFloat(e.target.value || "0") } } }))} />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-3">Screening values; PV/Wind reflect project spacing. BESS footprint scales with duration: acres = per-MW-hr × hours × MW + site overhead.</p>
+            </CardContent>
+          </Card>
+
+          <Card className="mb-4">
+            <CardHeader><CardTitle>Design & Land-Use Assumptions</CardTitle></CardHeader>
+            <CardContent>
+              <ul className="list-disc pl-6 space-y-1 text-sm">
+                <li><strong>Parcel & land:</strong> Inputs include Parcel (ac), Buildable %, Site Coverage %, MEP Yard %, Roads/Parking %, and fixed Substation acres.</li>
+                <li><strong>Stories:</strong> Stacked floors multiply total building ft² (and white space) without increasing footprint.</li>
+                <li><strong>White space:</strong> Building ft² × (1 − Support %) ⇒ White space; Racks = White space ÷ ft²/rack.</li>
+                <li><strong>IT MW from land:</strong> Racks × (kW/rack) ÷ 1000.</li>
+                <li><strong>Phasing:</strong> Equalized across phases by default; or enter per‑phase IT MW manually.</li>
               </ul>
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Cooling, PUE & WUE</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm text-muted-foreground space-y-1">
-              <ul className="list-disc ml-5 space-y-1">
-                <li><strong>PUE</strong> is user‑set and independent of cooling choice for screening. Typical ranges: ~1.25–1.5 (air); ~1.10–1.35 (liquid) depending on climate and density.</li>
-                <li><strong>WUE</strong> default suggestion: Air ≈ 0.30 L/kWh; Liquid ≈ 0.15 L/kWh. You can override directly.</li>
+          <Card className="mb-4">
+            <CardHeader><CardTitle>Cooling, PUE & WUE</CardTitle></CardHeader>
+            <CardContent>
+              <ul className="list-disc pl-6 space-y-1 text-sm">
+                <li><strong>PUE:</strong> User‑set and independent of cooling choice for screening. Typical ranges: ~1.25–1.5 (air); ~1.10–1.35 (liquid) depending on climate and density.</li>
+                <li><strong>WUE default suggestion:</strong> Air ≈ 0.30 L/kWh; Liquid ≈ 0.15 L/kWh. You can override directly in Inputs.</li>
               </ul>
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Representative Power Blocks (screening)</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm text-muted-foreground space-y-1">
-              <ul className="list-disc ml-5 space-y-1">
-                <li><strong>Grid</strong>: 100 MW block (availability 99.95%); no heat or water accounting.</li>
-                <li><strong>Recip (NG)</strong>: 18 MW/unit; heat rate ~8,924 Btu/kWh; ~1 gal/MWh water.</li>
-                <li><strong>SCGT</strong>: 57 MW/unit; ~10,999 Btu/kWh; zero process water assumed.</li>
-                <li><strong>CCGT (5000F 1x1)</strong>: 373.3 MW/unit; ~7,548 Btu/kWh; ~200 gal/MWh water (wet cooling representative).</li>
-                <li><strong>Fuel Cells (SOFC)</strong>: 10 MW block; ~6,318 Btu/kWh; negligible water.</li>
-                <li><strong>PV</strong>: 4.03 MW block (for count approximation); <em>non‑firm</em>.</li>
-                <li><strong>Wind</strong>: 5.89 MW block; <em>non‑firm</em>.</li>
-                <li><strong>BESS</strong>: 100 MW power block; duration set separately; <em>non‑firm</em> but can be accredited via ELCC.</li>
+          <Card className="mb-4">
+            <CardHeader><CardTitle>Representative Power Blocks (screening)</CardTitle></CardHeader>
+            <CardContent>
+              <ul className="list-disc pl-6 space-y-1 text-sm">
+                <li><strong>Grid:</strong> 100 MW block (availability 99.95%); no heat or water accounting.</li>
+                <li><strong>Recip (NG):</strong> 18 MW/unit; heat rate ~8,924 Btu/kWh; ~1 gal/MWh water.</li>
+                <li><strong>SCGT:</strong> 57 MW/unit; ~10,999 Btu/kWh; zero process water assumed.</li>
+                <li><strong>CCGT (5000F 1x1):</strong> 373.3 MW/unit; ~7,548 Btu/kWh; ~200 gal/MWh water (wet cooling representative).</li>
+                <li><strong>Fuel Cells (SOFC):</strong> 10 MW block; ~6,318 Btu/kWh; negligible water.</li>
+                <li><strong>PV:</strong> 4.03 MW block (for count approximation); <em>non‑firm</em>.</li>
+                <li><strong>Wind:</strong> 5.89 MW; <em>non‑firm</em>.</li>
+                <li><strong>BESS:</strong> 100 MW power block; duration set separately; <em>non‑firm</em> but can be accredited via ELCC.</li>
               </ul>
-              <p className="mt-2">Values are screening‑level and inspired by prior study inputs and industry ranges; refine per project and OEM data.</p>
+              <p className="text-xs text-muted-foreground mt-2">Values are screening‑level and inspired by prior study inputs and industry ranges; refine per project and OEM data.</p>
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Reliability & Accreditation</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm text-muted-foreground space-y-1">
-              <ul className="list-disc ml-5 space-y-1">
-                <li><strong>Target</strong> is sized on IT MW or Facility MW (PUE applied) per the toggle.</li>
-                <li><strong>Reliability check</strong>: N+k by dropping the largest <em>k</em> firm units (k = 1 for 99.9%, 2 for 99.99%, 3 for 99.999%).</li>
-                <li><strong>ELCC (toggle)</strong>: When enabled, accredited MW = PV×ELCC% + Wind×ELCC% + BESS×(ELCC%×duration/4h). Defaults: PV 40%, Wind 20%, BESS 100%.</li>
+          <Card className="mb-4">
+            <CardHeader><CardTitle>Reliability & Accreditation</CardTitle></CardHeader>
+            <CardContent>
+              <ul className="list-disc pl-6 space-y-1 text-sm">
+                <li><strong>Target sizing:</strong> Choose IT MW or Facility MW (IT×PUE applied) via the toggle.</li>
+                <li><strong>Reliability check:</strong> N+k by dropping the largest k firm units (k = 1 for 99.9%, 2 for 99.99%, 3 for 99.999%).</li>
+                <li><strong>ELCC (toggle):</strong> When enabled, accredited MW = PV×ELCC% + Wind×ELCC% + BESS×(ELCC%×duration/4h). Defaults: PV 40%, Wind 20%, BESS 100%.</li>
               </ul>
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Acre → IT MW Heuristics</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm text-muted-foreground space-y-1">
-              <ul className="list-disc ml-5 space-y-1">
+          <Card className="mb-4">
+            <CardHeader><CardTitle>Acre → IT MW Heuristics</CardTitle></CardHeader>
+            <CardContent>
+              <ul className="list-disc pl-6 space-y-1 text-sm">
                 <li>Single‑story, 35–45 ft²/rack @ ~10 kW/rack typically yields ~0.6–1.2 MW IT per acre buildable (before roads/MEP/substation set‑asides).</li>
                 <li>Higher density or smaller ft²/rack increases IT/acre; stacking floors scales linearly with story count.</li>
+                <li>Use this tool to stress test sensitivity (ft²/rack, support %, stories) rather than as a fixed rule.</li>
               </ul>
-              <p className="mt-2">Use this tool to stress test sensitivity (ft²/rack, support %, stories) rather than as a fixed rule.</p>
             </CardContent>
           </Card>
         </TabsContent>
 
         {/* Inputs */}
-        <TabsContent value="inputs" className="space-y-6">
-          <div className="grid md:grid-cols-3 gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><Info className="h-5 w-5" /> Mode</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="mode">Target IT vs. Max From Land</Label>
-                  <Switch id="mode" checked={inputs.mode === "target"} onCheckedChange={(c)=>setInputs((s)=>({ ...s, mode: c ? "target" : "land" }))} />
-                </div>
-                {inputs.mode === "target" ? (
-                  <div className="grid gap-2">
-                    <NumberField id="targetItMw" label="Target IT Load" value={inputs.targetItMw} onChange={(n)=>setInputs((s)=>({ ...s, targetItMw: n }))} suffix="MW" step={0.1} min={0} />
-                    <div className="flex flex-wrap gap-2">
-                      <Button variant={preset==='aggr' ? 'default' : 'outline'} onClick={()=>setInputs((s)=>({ ...s, sqftPerRack: 30, supportPct: 35 }))}>Aggressive (30 ft²/rack)</Button>
-                      <Button variant={preset==='typ' ? 'default' : 'outline'} onClick={()=>setInputs((s)=>({ ...s, sqftPerRack: 45, supportPct: 40 }))}>Typical (45 ft²/rack)</Button>
-                      <Button variant={preset==='cons' ? 'default' : 'outline'} onClick={()=>setInputs((s)=>({ ...s, sqftPerRack: 60, supportPct: 45 }))}>Conservative (60 ft²/rack)</Button>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">In <strong>From Land</strong> mode, the tool computes maximum IT MW from parcel & design assumptions.</p>
-                )}
+        <TabsContent value="inputs">
+          {InputsSection({ inputs, setInputs, preset })}
+        </TabsContent>
 
-                <div className="flex items-center justify-between pt-2">
-                  <Label htmlFor="phases">Equalize Phases</Label>
-                  <Switch id="phases" checked={inputs.equalizePhases} onCheckedChange={(c)=>setInputs((s)=>({ ...s, equalizePhases: c }))} />
-                </div>
-                <NumberField id="phaseCount" label="Number of Phases" value={inputs.phases} onChange={(n)=>setInputs((s)=>({ ...s, phases: Math.max(1, Math.floor(n)) }))} step={1} min={1} />
-
-                {!inputs.equalizePhases && (
-                  <div className="grid gap-2">
-                    <Label>Per-Phase IT (MW)</Label>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                      {Array.from({ length: inputs.phases }).map((_, i) => (
-                        <div key={i} className="flex items-center gap-2">
-                          <span className="text-xs text-muted-foreground w-8">P{i+1}</span>
-                          <Input type="number" inputMode="decimal" step={0.1} value={inputs.phaseItMw[i] ?? 0} onChange={(e)=>{
-                            const v = toNumber(e.target.value, 0);
-                            setInputs((s)=>{ const arr = s.phaseItMw.slice(); arr[i] = v; return { ...s, phaseItMw: arr };});
-                          }} />
-                          <span className="text-xs text-muted-foreground">MW</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="text-xs text-muted-foreground">Sum: {inputs.phaseItMw.slice(0, inputs.phases).reduce((a,b)=>a+ (Number.isFinite(b)?b:0), 0).toFixed(2)} MW</div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Stacked floors callout */}
-            <Card className="border-amber-300">
-              <CardHeader>
-                <CardTitle>Stacked Floors</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <NumberField id="stories" label="Stories (stacked floors)" value={inputs.stories} onChange={(n)=>setInputs((s)=>({ ...s, stories: Math.max(1, Math.floor(n)) }))} step={1} min={1} />
-                <div className="flex flex-wrap gap-2">
-                  {[1,2,3].map((n)=> (
-                    <Button key={n} variant={inputs.stories===n? 'default':'outline'} size="sm" onClick={()=>setInputs((s)=>({ ...s, stories: n }))}>{n}x</Button>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground">Increases usable white space and racks by the number of stacked floors without increasing footprint.</p>
-              </CardContent>
-            </Card>
-
-            {/* Parcel & Land */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Parcel & Land</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <NumberField id="parcel" label="Parcel area" value={inputs.parcelAcres} onChange={(n)=>setInputs((s)=>({ ...s, parcelAcres: n }))} suffix="ac" step={0.1} min={0} />
-                <div className="grid md:grid-cols-2 gap-3">
-                  <PercentField id="buildable" label="Buildable area" valuePct={inputs.buildablePct} onChange={(n)=>setInputs((s)=>({ ...s, buildablePct: Math.max(0, Math.min(100, n)) }))} />
-                  <PercentField id="coverage" label="Site coverage (building footprint)" valuePct={inputs.siteCoveragePct} onChange={(n)=>setInputs((s)=>({ ...s, siteCoveragePct: Math.max(0, Math.min(100, n)) }))} />
-                </div>
-                <div className="grid md:grid-cols-2 gap-3">
-                  <PercentField id="mepyard" label="MEP yard" valuePct={inputs.mepYardPct} onChange={(n)=>setInputs((s)=>({ ...s, mepYardPct: Math.max(0, Math.min(100, n)) }))} />
-                  <PercentField id="roads" label="Roads/Parking" valuePct={inputs.roadsPct} onChange={(n)=>setInputs((s)=>({ ...s, roadsPct: Math.max(0, Math.min(100, n)) }))} />
-                </div>
-                <NumberField id="subac" label="Substation" value={inputs.substationAcres} onChange={(n)=>setInputs((s)=>({ ...s, substationAcres: Math.max(0, n) }))} suffix="ac" step={0.1} min={0} />
-                <div className="grid md:grid-cols-3 gap-3">
-                  <NumberField id="sqftRack" label="White space per rack" value={inputs.sqftPerRack} onChange={(n)=>setInputs((s)=>({ ...s, sqftPerRack: Math.max(1, n) }))} suffix="ft²/rack" step={1} />
-                  <PercentField id="supportPct" label="Support space share" valuePct={inputs.supportPct} onChange={(n)=>setInputs((s)=>({ ...s, supportPct: Math.max(0, Math.min(95, n)) }))} />
-                  <NumberField id="rackKw" label="Rack density" value={inputs.rackDensityKw} onChange={(n)=>setInputs((s)=>({ ...s, rackDensityKw: Math.max(0.1, n) }))} suffix="kW/rack" step={0.1} />
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Cooling & Efficiency */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Cooling & Efficiency</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid gap-2">
-                  <Label>Cooling approach</Label>
-                  <Select value={inputs.cooling} onValueChange={(v)=>setInputs((s)=>({ ...s, cooling: v }))}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Air">Air-cooled</SelectItem>
-                      <SelectItem value="Liquid">Liquid/Water-cooled</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">Changing cooling updates suggested WUE; you can override below.</p>
-                </div>
-                <NumberField id="pue" label="PUE" value={inputs.pue} onChange={(n)=>setInputs((s)=>({ ...s, pue: Math.max(1, n) }))} />
-                <NumberField id="wue" label="WUE (L/kWh)" value={inputs.wue_L_per_kWh} onChange={(n)=>setInputs((s)=>({ ...s, wue_L_per_kWh: Math.max(0, n) }))} />
-              </CardContent>
-            </Card>
-          </div>
+        {/* Power & Mix */}
+        <TabsContent value="powermix" className="space-y-6">
+          {PowerMixSection()}
+          {/* Reliability Event (N+k drop) */}
+          <Card>
+            <CardHeader><CardTitle className="flex items-center gap-2"><ShieldAlert className="h-5 w-5" /> Reliability Event (N+{kFromReliability(inputs.reliability)} drop)</CardTitle></CardHeader>
+            <CardContent className="text-sm space-y-2">
+              <div>Dropped units (largest {kFromReliability(inputs.reliability)}):</div>
+              <ul className="list-disc ml-6">
+                {(activeCalc?.dropList || []).map((d: any, i: number) => (
+                  <li key={i}>{d.tech || "largest"} — {Number(d.size || 0).toFixed(1)} MW</li>
+                ))}
+                {((activeCalc?.dropList || []).length === 0) && <li>—</li>}
+              </ul>
+              <div className="grid md:grid-cols-4 gap-3 mt-2">
+                <Metric label="Remaining firm after event" value={`${(activeCalc?.firmAfterLoss || 0).toFixed(1)} MW`} />
+                <Metric label="Installed firm (total)" value={`${(((activeCalc?.comp || []).filter((r: any) => r.isFirm).reduce((a: number,b: any)=> a + ((b.installed || 0)), 0)) || 0).toFixed(1)} MW`} />
+                <Metric label="Accredited non-firm (ELCC)" value={`${(activeCalc?.accredited || 0).toFixed(1)} MW`} />
+                <Metric label="Status" value={activeCalc?.meets ? "Meets target" : "Does not meet target"} status={activeCalc?.meets} />
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Results */}
         <TabsContent value="results" className="space-y-6">
-          <div className="grid xl:grid-cols-4 md:grid-cols-2 gap-4">
+          {/* Top overview cards */}
+          <div className="grid md:grid-cols-2 gap-4">
             <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><Gauge className="h-5 w-5" /> IT Capacity</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1">
-                <div className="text-3xl font-semibold">{calc.itMwFromLand.toFixed(2)} <span className="text-base font-normal text-muted-foreground">MW (max from land)</span></div>
-                {inputs.mode === "target" && (
-                  <p className="text-sm text-muted-foreground">Target (effective): {calc.effectiveTargetItMw.toFixed(2)} MW</p>
-                )}
-                <div className={`text-sm font-medium ${calc.feasible ? "text-emerald-600" : "text-rose-600"}`}>
-                  {inputs.mode === "target" ? (calc.itMwFromLand >= calc.effectiveTargetItMw ? "Feasible for target" : "Not feasible for target") : "Computed from land"}
+              <CardHeader><CardTitle>IT Capacity</CardTitle></CardHeader>
+              <CardContent>
+                <div className="text-4xl font-semibold">{calc.itMwFromLand.toFixed(2)} <span className="text-2xl font-normal">MW</span></div>
+                <div className="text-sm text-green-700 mt-2">Computed from land</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader><CardTitle>Facility Power</CardTitle></CardHeader>
+              <CardContent>
+                <div className="text-4xl font-semibold">{(calc.effectiveTargetItMw * calc.pue).toFixed(2)} <span className="text-2xl font-normal">MW</span></div>
+                <div className="text-sm text-muted-foreground mt-2">PUE: {calc.pue.toFixed(2)} · IT share ≈ {(100 / calc.pue).toFixed(1)}%</div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Land + Installed Mix */}
+          <div className="grid md:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2"><PieIcon className="h-5 w-5" /> Land Summary</CardTitle></CardHeader>
+              <CardContent className="grid md:grid-cols-3 gap-4 items-center">
+                <div className="md:col-span-2" style={{ height: 300 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={landPieData} dataKey="value" nameKey="name" outerRadius={120} label={false} labelLine={false} paddingAngle={1}>
+                        {landPieData.map((_, i) => (
+                          <Cell key={`c-${i}`} fill={LAND_COLORS[i % LAND_COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <ReTooltip />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="text-sm space-y-1">
+                  {landPieData.map((d) => (
+                    <div key={d.name} className="flex justify-between"><span>{d.name}</span><span>{d.value.toFixed(2)} ac</span></div>
+                  ))}
+                  <div className="flex justify-between font-semibold pt-2 border-t"><span>Total Buildable</span><span>{calc.buildableAcres.toFixed(2)} ac</span></div>
                 </div>
               </CardContent>
             </Card>
 
             <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><TrendingUp className="h-5 w-5" /> Facility Power</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-3xl font-semibold">{(calc.effectiveTargetItMw * calc.pue).toFixed(2)} <span className="text-base font-normal text-muted-foreground">MW (total)</span></div>
-                <p className="text-sm text-muted-foreground">PUE: {calc.pue.toFixed(2)} · IT share ≈ {(100 / calc.pue).toFixed(1)}%</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>White Space & Racks</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1">
-                <div className="text-2xl font-semibold">{Math.round(calc.whiteSqft).toLocaleString()} <span className="text-base font-normal text-muted-foreground">ft² white space</span></div>
-                <div className="text-2xl font-semibold">{calc.racks.toLocaleString()} <span className="text-base font-normal text-muted-foreground">racks</span></div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Land Snapshot</CardTitle>
-              </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-2 text-sm">
-                <div>Parcel</div><div className="text-right font-medium">{calc.parcelAcres.toFixed(2)} ac</div>
-                <div>Buildable</div><div className="text-right font-medium">{calc.buildableAcres.toFixed(2)} ac</div>
-                <div>Building</div><div className="text-right">{calc.buildingFootprintAcres.toFixed(2)} ac</div>
-                <div>MEP Yard</div><div className="text-right">{calc.mepYardAcres.toFixed(2)} ac</div>
-                <div>Substation</div><div className="text-right">{calc.substationAcres.toFixed(2)} ac</div>
-                <div>Roads/Parking</div><div className="text-right">{calc.roadsAcres.toFixed(2)} ac</div>
-                <div>Open/Other</div><div className="text-right">{calc.openAcres.toFixed(2)} ac</div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Charts */}
-          <div className="grid md:grid-cols-2 gap-4">
-            <Card className="min-h-[360px]">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><PieIcon className="h-5 w-5" /> Land Allocation</CardTitle>
-              </CardHeader>
-              <CardContent className="h-80">
+              <CardHeader><CardTitle>Installed Mix (All Techs)</CardTitle></CardHeader>
+              <CardContent style={{ height: 260 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={[{ name: "Building", value: calc.buildingFootprintAcres }, { name: "MEP Yard", value: calc.mepYardAcres }, { name: "Substation", value: calc.substationAcres }, { name: "Roads/Parking", value: calc.roadsAcres }, { name: "Open/Other", value: calc.openAcres }].filter(d=>d.value>0.0001)} dataKey="value" nameKey="name" outerRadius={110} label>
-                      {[0,1,2,3,4].map((i) => (<Cell key={`c-${i}`} fill={LAND_COLORS[i % LAND_COLORS.length]} />))}
+                    <Pie data={mixPieData} dataKey="value" nameKey="name" outerRadius={110} label>
+                      {mixPieData.map((_, i) => (
+                        <Cell key={`m-${i}`} fill={MIX_COLORS[i % MIX_COLORS.length]} />
+                      ))}
                     </Pie>
-                    <ReTooltip formatter={(v,n)=>[`${toNumber(v).toFixed(2)} ac`, n]} />
-                    <Legend />
+                    <Legend formatter={(value, entry: any) => `${value} (${Number(entry?.payload?.value || 0).toFixed(0)} MW)`} />
+                    <ReTooltip />
                   </PieChart>
                 </ResponsiveContainer>
               </CardContent>
             </Card>
-
-            <Card className="min-h-[360px]">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><BarChart3 className="h-5 w-5" /> Phasing (IT MW)</CardTitle>
-              </CardHeader>
-              <CardContent className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={(inputs.equalizePhases ? calc.phaseValues : inputs.phaseItMw.slice(0, calc.phases)).map((v,i)=>({ phase:`P${i+1}`, IT_MW:Number((v ?? 0).toFixed(2)) }))}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="phase" />
-                    <YAxis unit=" MW" />
-                    <ReTooltip />
-                    <Legend />
-                    <Bar dataKey="IT_MW" name="IT MW" fill={BRAND.ORANGE} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><Droplets className="h-5 w-5" /> Water Use Breakdown</CardTitle>
-              </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-2 text-sm">
-                <div>Data center cooling (WUE)</div><div className="text-right font-medium">{calc.water_gpm_dc.toFixed(1)} gpm</div>
-                <div className="col-span-2 text-xs text-muted-foreground">Generation-side water varies by mix; see Power & Mix for a tech-by-tech tally. Totals shown there include DC cooling + generation.</div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
+          {/* Phasing chart */}
+          <Card>
+            <CardHeader><CardTitle>Phasing (IT MW)</CardTitle></CardHeader>
+            <CardContent style={{ height: 260 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={phaseSeries}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" label={{ value: "Technology", position: "insideBottom", offset: -5 }} />
+                  <YAxis label={{ value: "MW", angle: -90, position: "insideLeft" }} />
+                  <ReTooltip />
+                  <Bar dataKey="it" name="IT MW" fill={BRAND.ORANGE} />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
 
-        {/* Power & Mix (merged) */}
-        <TabsContent value="powermix" className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <SlidersHorizontal className="h-5 w-5" />
-              <Label className="mr-2">Mix mode</Label>
-              <Select value={inputs.mixMode} onValueChange={(v)=>setInputs((s)=>({ ...s, mixMode: v }))}>
-                <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="share">Target Mix (%)</SelectItem>
-                  <SelectItem value="manual">Manual Units</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center gap-6">
-              <div className="flex items-center gap-2">
-                <Label>Size to Facility MW</Label>
-                <Switch checked={inputs.genSizeToFacility} onCheckedChange={(c)=>setInputs((s)=>({ ...s, genSizeToFacility: c }))} />
+          {/* Sized Units table */}
+          <Card>
+            <CardHeader><CardTitle>Sized Units to Meet Reliability</CardTitle></CardHeader>
+            <CardContent>
+              <div className="grid md:grid-cols-5 gap-4 mb-3">
+                <Metric label="Required Capacity" value={`${(activeCalc?.reqMW || 0).toFixed(1)} MW (Facility)`} />
+                <Metric label={`Firm after N+${kFromReliability(inputs.reliability)} loss (thermal/grid)`} value={`${(activeCalc?.firmAfterLoss || 0).toFixed(1)} MW`} />
+                <Metric label="Accredited non-firm (ELCC)" value={`${(activeCalc?.accredited || 0).toFixed(1)} MW`} />
+                {(() => { const v = (activeCalc?.comp || []).filter((r: any) => r.isFirm).reduce((a: number,b: any) => a + ((b.installed || 0)), 0); return <Metric label="Installed firm (total)" value={`${v.toFixed(1)} MW`} />; })()}
+                <Metric label="Status" value={activeCalc?.meets ? "Meets target" : "Does not meet target"} status={activeCalc?.meets} />
               </div>
-              <div className="grid gap-1">
-                <Label>Reliability Target</Label>
-                <Select value={inputs.reliability} onValueChange={(v)=>setInputs((s)=>({ ...s, reliability: v }))}>
-                  <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="99.9">99.9% (N+1)</SelectItem>
-                    <SelectItem value="99.99">99.99% (N+2)</SelectItem>
-                    <SelectItem value="99.999">99.999% (N+3)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1">
-                <Label>PV Panel Wattage</Label>
-                <div className="flex items-center gap-2">
-                  <Input type="number" inputMode="decimal" step={10} value={inputs.pvPanelWatt} onChange={(e)=>setInputs((s)=>({ ...s, pvPanelWatt: toNumber(e.target.value, 550) }))} className="w-28" />
-                  <span className="text-sm text-muted-foreground">W/panel</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {inputs.mixMode === "share" ? (
-            <div className="grid lg:grid-cols-2 gap-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Firm Mix (% of required MW)</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {firmList.map((t) => (
-                    <div key={t} className="grid grid-cols-8 gap-3 items-center">
-                      <div className="col-span-2 text-sm">{t}</div>
-                      <div className="col-span-5">
-                        <ReSlider value={[shares[t] ?? 0]} max={100} step={1} onValueChange={(v)=>setShares((s)=>({ ...s, [t]: v[0] }))} />
-                      </div>
-                      <div className="col-span-1 text-right text-sm font-medium">{Math.round(shares[t] ?? 0)}%</div>
-                    </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left border-b">
+                    <th className="py-2 px-2">Technology</th>
+                    <th className="py-2 px-2">Unit MW</th>
+                    <th className="py-2 px-2">Units (sized)</th>
+                    <th className="py-2 px-2">Installed MW / Dispatched MW</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(activeCalc?.comp || []).map((row: any, i: number) => (
+                    <tr key={i} className={`${row.isFirm ? "" : "bg-amber-50"} border-b`}>
+                      <td className="py-2 px-2">
+                        {row.name} {!row.isFirm && (<span className="ml-2 text-xs inline-flex px-2 py-0.5 rounded bg-amber-100 text-amber-800">non-firm</span>)}
+                      </td>
+                      <td className="py-2 px-2">{(MIX_LIBRARY as any)[row.name]?.unitMW ?? (MIX_LIBRARY as any)[row.t]?.unitMW ?? (row.installed / Math.max(1, row.units || 1))}</td>
+                      <td className="py-2 px-2">{row.units ?? 0}</td>
+                      <td className="py-2 px-2">{(row.installed || 0).toFixed(1)} / {(row.dispatched || 0).toFixed(1)} MW</td>
+                    </tr>
                   ))}
-                  {sumFirmShares === 0 && (
-                    <div className="flex items-start gap-2 text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 text-xs">
-                      <AlertTriangle className="h-4 w-4 mt-0.5" />
-                      <span>No firm technologies selected. Firm capacity = 0. Enable ELCC and add PV/Wind/BESS or increase firm shares to meet the reliability target.</span>
-                    </div>
-                  )}
-                  <p className="text-xs text-muted-foreground">With strict sliders, no hidden fallback is applied. Only the technologies you select are built.</p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Non‑firm Add‑ons (% of required MW)</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {nonFirmList.map((t) => (
-                    <div key={t} className="grid grid-cols-8 gap-3 items-center">
-                      <div className="col-span-2 text-sm">{t}</div>
-                      <div className="col-span-5">
-                        <ReSlider value={[shares[t] ?? 0]} max={100} step={1} onValueChange={(v)=>setShares((s)=>({ ...s, [t]: v[0] }))} />
-                      </div>
-                      <div className="col-span-1 text-right text-sm font-medium">{Math.round(shares[t] ?? 0)}%</div>
-                    </div>
-                  ))}
-                  <p className="text-xs text-muted-foreground">PV/Wind/BESS are modeled as add‑ons; you can accredit a portion below.</p>
-                  <div className="flex items-center justify-between py-1">
-                    <Label>Accredit renewables (ELCC)</Label>
-                    <Switch checked={elccEnabled} onCheckedChange={(c)=>setElccEnabled(!!c)} />
-                  </div>
-                  <div className={`grid grid-cols-2 gap-3 mt-2 ${!elccEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
-                    <NumberField id="elccPV" label="PV ELCC" value={elcc.PV} onChange={(n)=>setElcc((e)=>({ ...e, PV: Math.max(0, Math.min(100, n)) }))} suffix="%" step={1} min={0} max={100} />
-                    <NumberField id="elccWind" label="Wind ELCC" value={elcc.Wind} onChange={(n)=>setElcc((e)=>({ ...e, Wind: Math.max(0, Math.min(100, n)) }))} suffix="%" step={1} min={0} max={100} />
-                    <NumberField id="elccBess" label="BESS ELCC" value={elcc.BESS} onChange={(n)=>setElcc((e)=>({ ...e, BESS: Math.max(0, Math.min(100, n)) }))} suffix="%" step={1} min={0} max={100} />
-                    <NumberField id="bessHr" label="BESS Duration" value={bessHours} onChange={(n)=>setBessHours(Math.max(0.5, n))} suffix="hr" step={0.5} min={0.5} />
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="lg:col-span-2">
-                <CardHeader className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5" /> Sized Units to Meet Reliability</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {shareCalc && (
-                    <>
-                      <div className="grid md:grid-cols-4 gap-4 text-sm">
-                        <div className="grid gap-1">
-                          <span className="text-muted-foreground">Required Capacity</span>
-                          <span className="font-medium">{shareCalc.reqMW.toFixed(1)} MW ({inputs.genSizeToFacility ? "Facility" : "IT"})</span>
-                        </div>
-                        <div className="grid gap-1">
-                          <span className="text-muted-foreground">Firm after N+{shareCalc.kLoss} loss (thermal/grid)</span>
-                          <span className="font-medium">{shareCalc.firmAfterLoss.toFixed(1)} MW</span>
-                        </div>
-                        <div className="grid gap-1">
-                          <span className="text-muted-foreground">Accredited non‑firm (ELCC)</span>
-                          <span className="font-medium">{shareCalc.accredited.toFixed(1)} MW</span>
-                        </div>
-                        <div className={`grid gap-1 ${shareCalc.meets ? "text-emerald-600" : "text-rose-600"}`}>
-                          <span className="text-muted-foreground">Status</span>
-                          <span className="font-semibold">{shareCalc.meets ? "Meets target" : "Does not meet target"}</span>
-                        </div>
-                      </div>
-
-                      <div className="rounded border mt-2">
-                        <div className="grid grid-cols-10 gap-2 px-3 py-2 text-xs font-medium text-muted-foreground">
-                          <div className="col-span-3">Technology</div>
-                          <div className="col-span-2 text-right">Unit MW</div>
-                          <div className="col-span-2 text-right">Units (sized)</div>
-                          <div className="col-span-3 text-right">Installed MW / Dispatched MW</div>
-                        </div>
-                        {(shareCalc.comp ?? []).map((d, idx) => (
-                          <div key={idx} className={`grid grid-cols-10 gap-2 items-center px-3 py-2 border-t ${d.isFirm === false ? 'bg-amber-50/60' : ''}`}>
-                            <div className="col-span-3 flex items-center gap-2">{d.name}{d.isFirm===false && (<span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-200 text-amber-900">non‑firm</span>)}</div>
-                            <div className="col-span-2 text-right">{Number.isFinite(d.installed) && (d.units ?? 0) > 0 ? (d.installed / Math.max(1, d.units)).toFixed(1) : '—'}</div>
-                            <div className="col-span-2 text-right">{d.units ?? 0}</div>
-                            <div className="col-span-3 text-right">{(d.installed ?? 0).toFixed(1)} / {(d.dispatched ?? 0).toFixed(1)} MW</div>
-                          </div>
-                        ))}
-                        <div className="px-3 py-2 text-xs text-muted-foreground">Non‑firm add‑ons sized from sliders. Accreditation contributes to the reliability check; dispatch not modeled.</div>
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-
-              <div className="grid md:grid-cols-2 gap-4 lg:col-span-2">
-                <Card className="min-h-[360px]">
-                  <CardHeader>
-                    <CardTitle>Installed vs. Dispatched (All Techs)</CardTitle>
-                  </CardHeader>
-                  <CardContent className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={(shareCalc?.comp ?? []).map((d)=>({ name: d.name, Installed: Number((d.installed ?? 0).toFixed(2)), Dispatched: Number((d.dispatched ?? 0).toFixed(2)) }))}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="name" />
-                        <YAxis unit=" MW" />
-                        <Legend />
-                        <ReTooltip />
-                        <Bar dataKey="Installed" name="Installed" fill={BRAND.MIDNIGHT} />
-                        <Bar dataKey="Dispatched" name="Dispatched" fill={BRAND.ORANGE} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-
-                <Card className="min-h-[360px]">
-                  <CardHeader>
-                    <CardTitle>Installed Mix (All Techs)</CardTitle>
-                  </CardHeader>
-                  <CardContent className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie data={(shareCalc?.comp ?? []).filter((d)=> (d.installed ?? 0) > 0).map((d)=>({ name:d.name, value:d.installed }))} dataKey="value" nameKey="name" outerRadius={110} label>
-                          {(shareCalc?.comp ?? []).map((_, i) => (<Cell key={`m-${i}`} fill={MIX_COLORS[i % MIX_COLORS.length]} />))}
-                        </Pie>
-                        <Legend />
-                        <ReTooltip formatter={(v,n)=>[`${toNumber(v).toFixed(1)} MW`, n]} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Dev sanity */}
-              <Card className="lg:col-span-2">
-                <CardHeader><CardTitle>Sanity Tests (Dev)</CardTitle></CardHeader>
-                <CardContent className="text-xs text-muted-foreground grid gap-1">
-                  <div>ELCC enabled: {String(elccEnabled)}; Accredited MW: {(shareCalc?.accredited ?? 0).toFixed(2)}</div>
-                  <div>Comp rows: {(shareCalc?.comp ?? []).length}; Firm-share sum: {sumFirmShares.toFixed(1)}%</div>
-                </CardContent>
-              </Card>
-            </div>
-          ) : (
-            // Manual mode builder
-            <div className="grid md:grid-cols-4 gap-4">
-              <Card className="md:col-span-2">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2"><Zap className="h-5 w-5" /> Power Mix Builder</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="rounded border overflow-x-auto">
-                    <div className="min-w-[820px]">
-                      <div className="grid grid-cols-12 gap-3 px-3 py-2 text-xs font-medium text-muted-foreground">
-                        <div className="col-span-4">Technology</div>
-                        <div className="col-span-2 text-right">Units</div>
-                        <div className="col-span-2 text-right">Unit MW</div>
-                        <div className="col-span-2 text-right">Availability</div>
-                        <div className="col-span-2 text-right">Heat rate / Water</div>
-                      </div>
-                      {mix.map((r) => (
-                        <div key={r.id} className="grid grid-cols-12 gap-3 items-center px-3 py-2 border-t">
-                          <div className="col-span-4">
-                            <Select value={r.tech} onValueChange={(v)=>onChangeTech(r.id, v)}>
-                              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {Object.keys(MIX_LIBRARY).map((t)=> (<SelectItem key={t} value={t}>{t}</SelectItem>))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="col-span-2">
-                            <Input type="number" inputMode="decimal" step={1} min={0} value={r.units} onChange={(e)=>setMix((m)=>m.map(x=>x.id===r.id?{...x,units:toNumber(e.target.value,0)}:x))} className="w-full text-right tabular-nums" />
-                          </div>
-                          <div className="col-span-2 flex items-center justify-end gap-2">
-                            <Input type="number" inputMode="decimal" step={0.1} min={0} value={r.unitMW} onChange={(e)=>setMix((m)=>m.map(x=>x.id===r.id?{...x,unitMW:toNumber(e.target.value,r.unitMW)}:x))} className="w-full text-right tabular-nums" />
-                            <span className="text-sm text-muted-foreground">MW</span>
-                          </div>
-                          <div className="col-span-2 flex items-center justify-end gap-2">
-                            <Input type="number" inputMode="decimal" step={0.001} min={0} max={1} value={r.unitAvailability} onChange={(e)=>setMix((m)=>m.map(x=>x.id===r.id?{...x,unitAvailability:Math.max(0,Math.min(1,toNumber(e.target.value,r.unitAvailability)))}:x))} className="w-full text-right tabular-nums" />
-                            <span className="text-sm text-muted-foreground">0–1</span>
-                          </div>
-                          <div className="col-span-2 text-right text-xs text-muted-foreground">
-                            {r.fuel !== "None" ? (<>
-                              <div>{r.heatRate.toLocaleString()} Btu/kWh</div>
-                              <div>{r.water_gal_per_MWh} gal/MWh</div>
-                            </>) : (<div>—</div>)}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex gap-2 pt-2">
-                    <Button variant="outline" size="sm" onClick={addRow}>Add row</Button>
-                    <Button variant="outline" size="sm" onClick={()=>setMix((m)=>m.slice(0,Math.max(0,m.length-1)))}>Remove last</Button>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="md:col-span-2">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5" /> Reliability Check</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {manualMixCalc && (
-                    <>
-                      <div className="grid md:grid-cols-4 gap-4 text-sm">
-                        <div className="grid gap-1">
-                          <span className="text-muted-foreground">Required Capacity</span>
-                          <span className="font-medium">{manualMixCalc.reqMW.toFixed(1)} MW ({inputs.genSizeToFacility ? "Facility" : "IT"})</span>
-                        </div>
-                        <div className="grid gap-1">
-                          <span className="text-muted-foreground">Firm after N+{manualMixCalc.kLoss} loss</span>
-                          <span className="font-medium">{manualMixCalc.firmAfterLoss.toFixed(1)} MW</span>
-                        </div>
-                        <div className="grid gap-1">
-                          <span className="text-muted-foreground">Accredited non‑firm (ELCC)</span>
-                          <span className="font-medium">{manualMixCalc.accredited.toFixed(1)} MW</span>
-                        </div>
-                        <div className={`grid gap-1 ${manualMixCalc.meets ? "text-emerald-600" : "text-rose-600"}`}>
-                          <span className="text-muted-foreground">Status</span>
-                          <span className="font-semibold">{manualMixCalc.meets ? "Meets target" : "Does not meet target"}</span>
-                        </div>
-                      </div>
-
-                      <div className="rounded border mt-2">
-                        <div className="grid grid-cols-10 gap-2 px-3 py-2 text-xs font-medium text-muted-foreground">
-                          <div className="col-span-3">Technology</div>
-                          <div className="col-span-2 text-right">Unit MW</div>
-                          <div className="col-span-2 text-right">Units</div>
-                          <div className="col-span-3 text-right">Installed MW / Dispatched MW</div>
-                        </div>
-                        {(manualMixCalc.comp ?? []).map((d, idx) => (
-                          <div key={idx} className={`grid grid-cols-10 gap-2 items-center px-3 py-2 border-t ${d.isFirm === false ? 'bg-amber-50/60' : ''}`}>
-                            <div className="col-span-3 flex items-center gap-2">{d.name}{d.isFirm===false && (<span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-200 text-amber-900">non‑firm</span>)}</div>
-                            <div className="col-span-2 text-right">{Number.isFinite(d.installed) && (d.units ?? 0) > 0 ? (d.installed / Math.max(1, d.units)).toFixed(1) : '—'}</div>
-                            <div className="col-span-2 text-right">{d.units ?? 0}</div>
-                            <div className="col-span-3 text-right">{(d.installed ?? 0).toFixed(1)} / {(d.dispatched ?? 0).toFixed(1)} MW</div>
-                          </div>
-                        ))}
-                        <div className="px-3 py-2 text-xs text-muted-foreground">Non‑firm rows are display‑only for dispatch; accreditation affects the reliability check when enabled.</div>
-                      </div>
-
-                      <div className="grid md:grid-cols-2 gap-4 mt-4">
-                        <Card className="min-h-[320px]">
-                          <CardHeader><CardTitle>Installed vs. Dispatched (All Techs)</CardTitle></CardHeader>
-                          <CardContent className="h-72">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={(manualMixCalc?.comp ?? []).map((d)=>({ name: d.name, Installed: Number((d.installed ?? 0).toFixed(2)), Dispatched: Number((d.dispatched ?? 0).toFixed(2)) }))}>
-                                <CartesianGrid strokeDasharray="3 3" />
-                                <XAxis dataKey="name" />
-                                <YAxis unit=" MW" />
-                                <Legend />
-                                <ReTooltip />
-                                <Bar dataKey="Installed" name="Installed" fill={BRAND.MIDNIGHT} />
-                                <Bar dataKey="Dispatched" name="Dispatched" fill={BRAND.ORANGE} />
-                              </BarChart>
-                            </ResponsiveContainer>
-                          </CardContent>
-                        </Card>
-                        <Card className="min-h-[320px]">
-                          <CardHeader><CardTitle>Installed Mix (All Techs)</CardTitle></CardHeader>
-                          <CardContent className="h-72">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <PieChart>
-                                <Pie data={(manualMixCalc?.comp ?? []).filter((d)=> (d.installed ?? 0) > 0).map((d)=>({ name:d.name, value:d.installed }))} dataKey="value" nameKey="name" outerRadius={100} label>
-                                  {(manualMixCalc?.comp ?? []).map((_, i) => (<Cell key={`mi-${i}`} fill={MIX_COLORS[i % MIX_COLORS.length]} />))}
-                                </Pie>
-                                <Legend />
-                                <ReTooltip formatter={(v,n)=>[`${toNumber(v).toFixed(1)} MW`, n]} />
-                              </PieChart>
-                            </ResponsiveContainer>
-                          </CardContent>
-                        </Card>
-                      </div>
-
-                      <div className="grid md:grid-cols-3 gap-4 mt-2">
-                        <Card>
-                          <CardHeader><CardTitle>Fuel</CardTitle></CardHeader>
-                          <CardContent className="text-sm">
-                            <div>Thermal fuel: <span className="font-medium">{(manualMixCalc.fuel_MMBtu_per_h).toFixed(1)}</span> MMBtu/h</div>
-                            <div>Gas flow: <span className="font-medium">{(manualMixCalc.gas_MSCF_per_h).toFixed(2)}</span> MSCF/h</div>
-                          </CardContent>
-                        </Card>
-                        <Card>
-                          <CardHeader><CardTitle>Water (generation)</CardTitle></CardHeader>
-                          <CardContent className="text-sm">
-                            <div>Gen water: <span className="font-medium">{(manualMixCalc.genWater_gpm).toFixed(1)}</span> gpm</div>
-                            <div>Total (DC + gen): <span className="font-medium">{(manualMixCalc.totalWater_gpm).toFixed(1)}</span> gpm</div>
-                          </CardContent>
-                        </Card>
-                        <Card>
-                          <CardHeader><CardTitle>Renewables</CardTitle></CardHeader>
-                          <CardContent className="text-sm">
-                            <div>PV nameplate: <span className="font-medium">{(manualMixCalc.pvMW).toFixed(1)}</span> MW</div>
-                            <div>Wind nameplate: <span className="font-medium">{(manualMixCalc.windMW).toFixed(1)}</span> MW</div>
-                          </CardContent>
-                        </Card>
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          )}
+                </tbody>
+              </table>
+              <p className="text-xs text-muted-foreground mt-2">Non-firm add-ons sized from sliders or manual rows. Accreditation contributes to the reliability check; dispatch not modeled for non-firm.</p>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>
   );
-}
 
-// ================= Reusable fields =================
-function NumberField({ id, label, value, onChange, suffix, step = "any", min, max }){
-  return (
-    <div className="grid gap-2">
-      <Label htmlFor={id}>{label}</Label>
-      <div className="flex items-center gap-2">
-        <Input id={id} inputMode="decimal" type="number" step={step} min={min} max={max} value={Number.isFinite(value) ? value : 0} onChange={(e)=>onChange(toNumber(e.target.value,0))} />
-        {suffix ? <span className="text-sm text-muted-foreground w-16 text-right">{suffix}</span> : null}
+  // ======== Local section components ========
+  function Metric({ label, value, status }: { label: string; value: string; status?: boolean }) {
+    return (
+      <div className="p-3 rounded border">
+        <div className="text-xs text-muted-foreground">{label}</div>
+        <div className={`text-base font-medium ${status === true ? "text-green-700" : status === false ? "text-red-700" : ""}`}>{value}</div>
       </div>
-    </div>
-  );
-}
-
-function PercentField({ id, label, valuePct, onChange }){
-  return (
-    <div className="grid gap-2">
-      <Label htmlFor={id}>{label}</Label>
-      <div className="flex items-center gap-2">
-        <Input id={id} inputMode="decimal" type="number" step={0.1} min={0} max={100} value={Number.isFinite(valuePct) ? valuePct : 0} onChange={(e)=>onChange(toNumber(e.target.value,0))} />
-        <span className="text-sm text-muted-foreground w-16 text-right">%</span>
-      </div>
-    </div>
-  );
-}
-
-function ReSlider({ value, max=100, step=1, onValueChange }){
-  return (
-    <input type="range" min={0} max={max} step={step} value={value[0]} onChange={(e)=>onValueChange([parseFloat(e.target.value)])} className="w-full" />
-  );
-}
-
-// --- Lightweight dev tests ---
-(function runDevTests(){
-  if (typeof window === 'undefined') return;
-  const params = new URLSearchParams(window.location.search);
-  if (!params.has('devtest')) return;
-  try {
-    console.group('DC Tool Dev Tests');
-    console.assert(toNumber('1,234.5') === 1234.5, 'toNumber should parse commas');
-    console.assert(toNumber('abc', 7) === 7, 'toNumber fallback works');
-    console.assert(acresToSqft(1) === 43560, 'acresToSqft basic');
-    console.assert(Math.abs(galPerHourToGpm(60) - 1) < 1e-9, 'galPerHourToGpm basic');
-    console.assert(Math.abs(litersToGallons(3.78541) - 1) < 1e-6, 'litersToGallons basic');
-    // Palette sanity
-    console.assert(LAND_COLORS.length >= 5 && MIX_COLORS.length >= 5, 'brand palettes defined');
-    // Simple N+1 drop test
-    const unitList = [100,100,50];
-    const sorted = unitList.slice().sort((a,b)=>b-a);
-    const installed = unitList.reduce((a,b)=>a+b,0);
-    const after = installed - sorted[0];
-    console.assert(after === 150, 'N+1 drop largest unit');
-    console.groupEnd();
-  } catch (e) {
-    console.error('Dev tests failed:', e);
+    );
   }
-})();
+
+  function InputsSection({ inputs, setInputs, preset }: any) {
+    return (
+      <div className="space-y-6">
+        <div className="grid lg:grid-cols-3 gap-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><Info className="h-5 w-5" /> Mode</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="mode">Target IT vs. Max From Land</Label>
+                <Switch id="mode" checked={inputs.mode === "target"} onCheckedChange={(c) => setInputs((s: any) => ({ ...s, mode: c ? "target" : "land" }))} />
+              </div>
+              {inputs.mode === "target" ? (
+                <div className="grid gap-2">
+                  <NumberField id="targetItMw" label="Target IT Load" value={inputs.targetItMw} onChange={(n: number) => setInputs((s: any) => ({ ...s, targetItMw: n }))} suffix="MW" step={0.1} min={0} />
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant={preset === "aggr" ? "default" : "outline"} onClick={() => setInputs((s: any) => ({ ...s, sqftPerRack: 30, supportPct: 35 }))}>Aggressive (30 ft²/rack)</Button>
+                    <Button variant={preset === "typ" ? "default" : "outline"} onClick={() => setInputs((s: any) => ({ ...s, sqftPerRack: 45, supportPct: 40 }))}>Typical (45 ft²/rack)</Button>
+                    <Button variant={preset === "cons" ? "default" : "outline"} onClick={() => setInputs((s: any) => ({ ...s, sqftPerRack: 60, supportPct: 45 }))}>Conservative (60 ft²/rack)</Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">Max IT will be computed from land, building, and rack inputs below.</div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>Parcel & Land</CardTitle></CardHeader>
+            <CardContent className="grid grid-cols-2 gap-3">
+              <NumberField id="parcelAcres" label="Parcel" value={inputs.parcelAcres} onChange={(n: number) => setInputs((s: any) => ({ ...s, parcelAcres: n }))} suffix="ac" step={1} min={0} />
+              <PercentField id="buildablePct" label="Buildable" value={inputs.buildablePct} onChange={(n: number) => setInputs((s: any) => ({ ...s, buildablePct: n }))} />
+              <PercentField id="siteCoveragePct" label="Site Coverage" value={inputs.siteCoveragePct} onChange={(n: number) => setInputs((s: any) => ({ ...s, siteCoveragePct: n }))} />
+              <NumberField id="stories" label="Stories (stacked)" value={inputs.stories} onChange={(n: number) => setInputs((s: any) => ({ ...s, stories: Math.max(1, Math.floor(n || 1)) }))} step={1} min={1} />
+              <PercentField id="mepYardPct" label="MEP Yard % (of buildable)" value={inputs.mepYardPct} onChange={(n: number) => setInputs((s: any) => ({ ...s, mepYardPct: n }))} />
+              <PercentField id="roadsPct" label="Roads/Parking %" value={inputs.roadsPct} onChange={(n: number) => setInputs((s: any) => ({ ...s, roadsPct: n }))} />
+              <NumberField id="substationAcres" label="Substation" value={inputs.substationAcres} onChange={(n: number) => setInputs((s: any) => ({ ...s, substationAcres: n }))} suffix="ac" step={0.1} min={0} />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>White Space, Racks & Cooling</CardTitle></CardHeader>
+            <CardContent className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <Label className="text-sm">Rack layout (ft² per rack)</Label>
+                <Select value={String(inputs.sqftPerRack)} onValueChange={(v) => setInputs((s: any) => ({ ...s, sqftPerRack: toNumber(v, s.sqftPerRack) }))}>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="30">Dense (30)</SelectItem>
+                    <SelectItem value="45">Typical (45)</SelectItem>
+                    <SelectItem value="60">Spacious (60)</SelectItem>
+                    <SelectItem value={String(inputs.sqftPerRack)}>Current ({inputs.sqftPerRack})</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <NumberField id="sqftPerRack" label="ft² per rack (override)" value={inputs.sqftPerRack} onChange={(n: number) => setInputs((s: any) => ({ ...s, sqftPerRack: n }))} step={1} min={10} />
+              <NumberField id="rackDensityKw" label="kW per rack" value={inputs.rackDensityKw} onChange={(n: number) => setInputs((s: any) => ({ ...s, rackDensityKw: n }))} step={0.5} min={1} />
+              <PercentField id="supportPct" label="Support % of building ft²" value={inputs.supportPct} onChange={(n: number) => setInputs((s: any) => ({ ...s, supportPct: n }))} />
+
+              <div className="col-span-2">
+                <Label>Cooling</Label>
+                <Select value={inputs.cooling} onValueChange={(v) => setInputs((s: any) => ({ ...s, cooling: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Air">Air</SelectItem>
+                    <SelectItem value="Liquid">Liquid</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <NumberField id="pue" label="PUE" value={inputs.pue} onChange={(n: number) => setInputs((s: any) => ({ ...s, pue: Math.max(1.0, n) }))} step={0.01} min={1} />
+              <NumberField id="wue" label="WUE (L/kWh)" value={inputs.wue_L_per_kWh} onChange={(n: number) => setInputs((s: any) => ({ ...s, wue_L_per_kWh: Math.max(0, n) }))} step={0.01} min={0} />
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card>
+          <CardHeader><CardTitle>Phasing</CardTitle></CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-3 mb-3">
+              <Label className="w-40">Equalize phases</Label>
+              <Switch checked={inputs.equalizePhases} onCheckedChange={(c) => setInputs((s: any) => ({ ...s, equalizePhases: c }))} />
+              <div className="flex items-center gap-2 ml-6">
+                <Label>Phases</Label>
+                <Input className="w-24" type="number" value={inputs.phases} min={1} step={1} onChange={(e) => setInputs((s: any) => ({ ...s, phases: Math.max(1, parseInt(e.target.value || "1", 10)) }))} />
+              </div>
+            </div>
+            {!inputs.equalizePhases && (
+              <div className="grid md:grid-cols-3 gap-3">
+                {Array.from({ length: inputs.phases }).map((_, i) => (
+                  <NumberField key={i} id={`phase-${i}`} label={`Phase ${i + 1} IT`} value={inputs.phaseItMw[i] || 0} onChange={(n: number) => setInputs((s: any) => { const arr = s.phaseItMw.slice(); arr[i] = Math.max(0, n); return { ...s, phaseItMw: arr }; })} suffix="MW" step={0.1} min={0} />
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  function PowerMixSection() {
+    return (
+      <Card>
+        <CardHeader><CardTitle className="flex items-center gap-2"><SlidersHorizontal className="h-5 w-5" /> Generation Strategy</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <Button variant={inputs.mixMode === "share" ? "default" : "outline"} onClick={() => setInputs((s: any) => ({ ...s, mixMode: "share" }))}>Share sliders</Button>
+            <Button variant={inputs.mixMode === "manual" ? "default" : "outline"} onClick={() => setInputs((s: any) => ({ ...s, mixMode: "manual" }))}>Manual units</Button>
+            <div className="ml-auto flex items-center gap-2">
+              <Label>Size to Facility (IT×PUE)</Label>
+              <Switch checked={inputs.genSizeToFacility} onCheckedChange={(c) => setInputs((s: any) => ({ ...s, genSizeToFacility: c }))} />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Label>Reliability</Label>
+            {["99.9", "99.99", "99.999"].map((r) => (
+              <Button key={r} variant={inputs.reliability === r ? "default" : "outline"} onClick={() => setInputs((s: any) => ({ ...s, reliability: r }))}>{r}%</Button>
+            ))}
+            <div className="flex items-center gap-2 ml-4">
+              <Label>ELCC enabled</Label>
+              <Switch checked={elccEnabled} onCheckedChange={setElccEnabled} />
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-4">
+            <Card className="col-span-2">
+              <CardHeader><CardTitle>Mix Inputs</CardTitle></CardHeader>
+              <CardContent className="space-y-4">
+                {inputs.mixMode === "share" ? (
+                  <div className="space-y-4">
+                    <div>
+                      <Label className="font-semibold">Firm shares (% of required MW)</Label>
+                      <div className="grid md:grid-cols-2 gap-3 mt-2">
+                        {firmList.map((t, i) => (
+                          <SliderRow key={t} label={t} value={(shares as any)[t]} onChange={(v: number) => setShares((s: any) => ({ ...s, [t]: v }))} color={MIX_COLORS[i % MIX_COLORS.length]} />
+                        ))}
+                      </div>
+                      <div className="text-sm text-muted-foreground mt-1">Sum of firm shares: <strong>{sumFirmShares.toFixed(0)}%</strong> (optimizer adds units until reliability target is met).</div>
+                    </div>
+                    <div>
+                      <Label className="font-semibold">Non-firm nameplate (% of required MW)</Label>
+                      <div className="grid md:grid-cols-3 gap-3 mt-2">
+                        {nonFirmList.map((t, i) => (
+                          <SliderRow key={t} label={t} value={(shares as any)[t]} onChange={(v: number) => setShares((s: any) => ({ ...s, [t]: v }))} color={MIX_COLORS[(i + 4) % MIX_COLORS.length]} />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid md:grid-cols-4 gap-3">
+                      <SliderRow label="PV ELCC %" value={elcc.PV} onChange={(v: number) => setElcc((e: any) => ({ ...e, PV: v }))} min={0} max={100} step={1} />
+                      <SliderRow label="Wind ELCC %" value={elcc.Wind} onChange={(v: number) => setElcc((e: any) => ({ ...e, Wind: v }))} min={0} max={100} step={1} />
+                      <SliderRow label="BESS ELCC %" value={elcc.BESS} onChange={(v: number) => setElcc((e: any) => ({ ...e, BESS: v }))} min={0} max={100} step={1} />
+                      <SliderRow label="BESS Duration (h)" value={bessHours} onChange={setBessHours} min={1} max={12} step={1} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {mix.map((row: any) => (
+                      <div key={row.id} className="grid grid-cols-12 gap-2 items-end">
+                        <div className="col-span-5">
+                          <Label>Technology</Label>
+                          <Select value={row.tech} onValueChange={(v) => onChangeTech(row.id, v)}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {Object.keys(MIX_LIBRARY).map((t) => (
+                                <SelectItem key={t} value={t}>{t}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="col-span-3">
+                          <NumberField id={`u-${row.id}`} label="Units" value={row.units} onChange={(n: number) => updateRow(row.id, { units: Math.max(0, Math.floor(n)) })} step={1} min={0} />
+                        </div>
+                        <div className="col-span-3">
+                          <div className="text-xs text-muted-foreground">Nameplate</div>
+                          <div className="text-sm font-medium">{(row.units * row.unitMW).toFixed(1)} MW</div>
+                        </div>
+                        <div className="col-span-1 flex justify-end">
+                          <Button variant="ghost" onClick={() => removeRow(row.id)}>✕</Button>
+                        </div>
+                      </div>
+                    ))}
+                    <Button variant="outline" onClick={addRow}>Add row</Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle>Reliability Check</CardTitle></CardHeader>
+              <CardContent className="space-y-2">
+                <MiniReliabilitySummary calc={activeCalc} elccEnabled={elccEnabled} />
+                {(activeCalc?.dropList || []).length > 0 && (
+                  <div className="text-xs text-muted-foreground">Worst-case outage drops {(activeCalc?.dropList || []).length} largest firm unit(s).</div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader><CardTitle>Installed vs Dispatched</CardTitle></CardHeader>
+            <CardContent style={{ height: 320 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={activeCalc?.comp || []}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" label={{ value: "Technology", position: "insideBottom", offset: -5 }} />
+                  <YAxis />
+                  <ReTooltip />
+                  <Legend />
+                  <Bar dataKey="installed" name="Installed MW">
+                    {(activeCalc?.comp || []).map((_: any, i: number) => (
+                      <Cell key={`i-${i}`} fill={MIX_COLORS[i % MIX_COLORS.length]} />
+                    ))}
+                  </Bar>
+                  <Bar dataKey="dispatched" name="Dispatched MW">
+                    {(activeCalc?.comp || []).map((_: any, i: number) => (
+                      <Cell key={`d-${i}`} fill={i % 2 ? BRAND.MIDNIGHT : BRAND.TEAL} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </CardContent>
+      </Card>
+    );
+  }
+}
+
+// ---------------- UI Helpers ----------------
+function NumberField({ id, label, value, onChange, suffix, step = 1, min = -Infinity, max = Infinity }: any) {
+  return (
+    <div>
+      <Label htmlFor={id}>{label}</Label>
+      <div className="flex items-center gap-2">
+        <Input id={id} type="number" value={value} step={step} min={min} max={max} onChange={(e) => onChange(toNumber(e.target.value, value))} />
+        {suffix && <span className="text-sm text-muted-foreground">{suffix}</span>}
+      </div>
+    </div>
+  );
+}
+
+function PercentField({ id, label, value, onChange }: any) {
+  const v = Math.max(0, Math.min(100, toNumber(value, 0)));
+  return (
+    <div>
+      <Label htmlFor={id}>{label}</Label>
+      <div className="flex items-center gap-3">
+        <Slider className="w-full" value={[v]} min={0} max={100} step={1} onValueChange={([x]) => onChange(x)} />
+        <Input id={id} className="w-20" type="number" value={v} min={0} max={100} step={1} onChange={(e) => onChange(Math.max(0, Math.min(100, toNumber(e.target.value, v))))} />
+        <span>%</span>
+      </div>
+    </div>
+  );
+}
+
+function SliderRow({ label, value = 0, onChange, min = 0, max = 100, step = 1, color = BRAND.ORANGE }: any) {
+  const v = Math.max(min, Math.min(max, toNumber(value, 0)));
+  return (
+    <div>
+      <div className="flex justify-between text-sm mb-1"><span>{label}</span><span>{v}{max === 100 ? "%" : ""}</span></div>
+      <Slider value={[v]} min={min} max={max} step={step} onValueChange={([x]) => onChange(x)} style={{ accentColor: color }} />
+    </div>
+  );
+}
+
+function MiniReliabilitySummary({ calc, elccEnabled }: any) {
+  if (!calc) return <div className="text-sm text-muted-foreground">No mix yet.</div>;
+  const badgeClass = calc.meets ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800";
+  const installedFirm = (calc?.comp || []).filter((r: any) => r.isFirm).reduce((a: number,b: any) => a + ((b.installed || 0)), 0);
+  return (
+    <div className="text-sm space-y-1">
+      <div className={`inline-flex px-2 py-1 rounded ${badgeClass}`}>{calc.meets ? "Meets target" : "Does not meet target"}</div>
+      <div className="flex justify-between"><span>Required MW</span><span>{calc.reqMW?.toFixed(1)}</span></div>
+      <div className="flex justify-between"><span>Installed firm (total)</span><span>{installedFirm.toFixed(1)}</span></div>
+      <div className="flex justify-between"><span>Firm after worst-case loss</span><span>{calc.firmAfterLoss?.toFixed(1)}</span></div>
+      <div className="flex justify-between"><span>Accredited non-firm {elccEnabled ? "(ELCC on)" : "(ELCC off)"}</span><span>{calc.accredited?.toFixed(1)}</span></div>
+    </div>
+  );
+}
