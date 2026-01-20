@@ -8,5 +8,6 @@ export default defineConfig({
   resolve: {
     alias: { '@': path.resolve(__dirname, 'src') },
   },
-  base: './', // important for SharePoint so built asset paths are relative
+  base: "/Test/",   // must match repo name exactly (case-sensitive)
+  build: { outDir: "docs" },
 })
