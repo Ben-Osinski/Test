@@ -1753,6 +1753,7 @@ const DRAW_STYLES: any[] = [
 // -----------------------
 export default function DataCenterFeasibilityTool() {
   const [app, setApp] = useLocalStorageState<AppState>("dc_feasibility_v18", DEFAULTS);
+  const [showDisclaimer, setShowDisclaimer] = useState(true);
 
   useEffect(() => {
     runSelfTests();
@@ -2379,9 +2380,38 @@ export default function DataCenterFeasibilityTool() {
 
   useEffect(() => {
     if (app.tab !== "mapping") return;
-    ensureMap();
+
+    let raf = 0;
+    let attempts = 0;
+    const maxAttempts = 30;
+
+    const tryInit = () => {
+      attempts += 1;
+
+      if (!mapRef.current) {
+        ensureMap();
+      }
+
+      const map = mapRef.current;
+      const el = mapContainerRef.current;
+      if (map && el) {
+        try {
+          map.resize();
+        } catch {
+          // ignore
+        }
+        return;
+      }
+
+      if (attempts < maxAttempts) {
+        raf = window.requestAnimationFrame(tryInit);
+      }
+    };
+
+    raf = window.requestAnimationFrame(tryInit);
+    return () => window.cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [app.tab]);
+  }, [app.tab, showDisclaimer]);
 
   useEffect(() => {
     if (app.tab !== "mapping") return;
@@ -2412,7 +2442,7 @@ export default function DataCenterFeasibilityTool() {
 
     ro.observe(el);
     return () => ro.disconnect();
-  }, [app.tab]);
+  }, [app.tab, showDisclaimer]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -2875,6 +2905,32 @@ export default function DataCenterFeasibilityTool() {
 
   return (
     <div className="min-h-screen w-full bg-white text-slate-900">
+      {showDisclaimer && (
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/50 px-4">
+          <Card className="w-full max-w-2xl border-slate-300 shadow-xl">
+            <CardHeader>
+              <CardTitle>Screening Tool Disclaimer</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-slate-700">
+              <p>
+                This application is intended for conceptual screening only. It is not a substitute for detailed engineering, owner
+                requirements, site due diligence, permitting analysis, utility studies, or safety reviews.
+              </p>
+              <ul className="list-disc space-y-1 pl-5">
+                <li>Outputs are based on simplified assumptions and user-provided inputs.</li>
+                <li>Results are directional and should not be used as final design criteria.</li>
+                <li>Land use, footprint, and generation metrics may differ from project-specific engineering outcomes.</li>
+                <li>Users are responsible for validating all conclusions with qualified professionals.</li>
+              </ul>
+              <div className="pt-2">
+                <Button onClick={() => setShowDisclaimer(false)} className="bg-black text-white hover:bg-slate-800">
+                  I understand
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
       <div className="mx-auto max-w-7xl px-6 py-6">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
@@ -4132,9 +4188,9 @@ export default function DataCenterFeasibilityTool() {
                   </CardHeader>
                   <CardContent className="text-sm text-slate-700">
                     <ul className="list-disc space-y-1 pl-5">
-                      <li><b>Buildable:</b> Buildable acres = Parcel acres × Buildable %. This is the total developable land budget used in land allocation.</li>
-                      <li><b>Site coverage:</b> Coverage-limited building envelope = Buildable acres × Site coverage %. This only caps building footprint.</li>
-                      <li><b>Required footprint:</b> For a given effective IT MW and Stories, unconstrained required building footprint is computed from racks and ft²/rack; land allocation uses the coverage-capped footprint.</li>
+                      <li><b>Buildable:</b> Buildable acres = Parcel acres ï¿½ Buildable %. This is the total developable land budget used in land allocation.</li>
+                      <li><b>Site coverage:</b> Coverage-limited building envelope = Buildable acres ï¿½ Site coverage %. This only caps building footprint.</li>
+                      <li><b>Required footprint:</b> For a given effective IT MW and Stories, unconstrained required building footprint is computed from racks and ftï¿½/rack; land allocation uses the coverage-capped footprint.</li>
                       <li><b>MEP yard land:</b> MEP acres = Building footprint Ã— (MEP %).</li>
                       <li><b>Roads/Parking land:</b> Roads acres = (Building + MEP + Substation) Ã— (Roads %).</li>
                       <li><b>Substation land:</b> Substation acres = max(Substation minimum input, 1.25 + 0.0075 Ã— Facility MW).</li>
