@@ -1252,13 +1252,17 @@ type MappingState = {
 };
 
 type AppState = {
+  schemaVersion: number;
   tab: "inputs" | "power" | "results" | "mapping" | "assumptions";
   inputs: InputsState;
   power: PowerState;
   mapping: MappingState;
 };
 
+const APP_SCHEMA_VERSION = 19;
+
 const DEFAULTS: AppState = {
+  schemaVersion: APP_SCHEMA_VERSION,
   tab: "inputs",
   inputs: {
     modeUseTarget: true,
@@ -1266,7 +1270,7 @@ const DEFAULTS: AppState = {
 
     parcelAc: 500,
     buildablePct: 30,
-    siteCoveragePct: 50,
+    siteCoveragePct: 100,
     mepYardPct: 15,
     roadsPct: 10,
     substationAc: 2,
@@ -1753,6 +1757,19 @@ export default function DataCenterFeasibilityTool() {
   useEffect(() => {
     runSelfTests();
   }, []);
+
+  useEffect(() => {
+    const schema = Number((app as any).schemaVersion || 0);
+    if (schema >= APP_SCHEMA_VERSION) return;
+    setApp((prev) => ({
+      ...prev,
+      schemaVersion: APP_SCHEMA_VERSION,
+      inputs: {
+        ...prev.inputs,
+        siteCoveragePct: 100,
+      },
+    }));
+  }, [app.schemaVersion, setApp]);
 
   useEffect(() => {
     const model = app.mapping?.generationShapeModel as any;
@@ -2995,19 +3012,27 @@ export default function DataCenterFeasibilityTool() {
                       suffix="%"
                       accent={BRAND.midnight}
                       onChange={(v) => setInputs({ buildablePct: clamp(v, 0, 100) })}
-                      note="Buildable acres = Parcel × Buildable %."
+                      note="Controls total developable land used across land allocation outputs."
                     />
 
-                    <RangeWithInput
-                      label="Site coverage"
-                      value={app.inputs.siteCoveragePct}
-                      min={0}
-                      max={100}
-                      step={1}
-                      suffix="%"
-                      accent={BRAND.orange}
-                      onChange={(v) => setInputs({ siteCoveragePct: clamp(v, 0, 100) })}
-                    />
+                    <details className="rounded-md border px-3 py-2">
+                      <summary className="cursor-pointer text-sm font-medium">
+                        Advanced: Site coverage ({fmt(app.inputs.siteCoveragePct, 0)}%)
+                      </summary>
+                      <div className="mt-3">
+                        <RangeWithInput
+                          label="Site coverage"
+                          value={app.inputs.siteCoveragePct}
+                          min={0}
+                          max={100}
+                          step={1}
+                          suffix="%"
+                          accent={BRAND.orange}
+                          onChange={(v) => setInputs({ siteCoveragePct: clamp(v, 0, 100) })}
+                          note="Controls maximum building footprint envelope only (Buildable ac × Site coverage %)."
+                        />
+                      </div>
+                    </details>
 
                     <div className="grid grid-cols-2 gap-3">
                       <RangeWithInput
@@ -3631,7 +3656,8 @@ export default function DataCenterFeasibilityTool() {
                     {effectiveIT.mode === "max" && <div className="text-sm text-green-700">Computed from land (max envelope).</div>}
 
                     <div className="text-xs text-muted-foreground">
-                      Site max from land envelope: {fmt(envelope.itMW, 2)} MW. (Coverage-limited building footprint: {fmt(envelope.envelopeFootprintAc, 2)} ac)
+                      Site max from land envelope: {fmt(envelope.itMW, 2)} MW. Unconstrained required building footprint: {fmt(requiredBldg.footprintAc, 2)} ac.
+                      Coverage-limited max building footprint: {fmt(envelope.envelopeFootprintAc, 2)} ac.
                     </div>
                   </CardContent>
                 </Card>
@@ -3655,8 +3681,10 @@ export default function DataCenterFeasibilityTool() {
                     <CardTitle>Required Footprint (for effective IT)</CardTitle>
                   </CardHeader>
                   <CardContent className="grid grid-cols-2 gap-3">
-                    <Metric label="Required building footprint" value={`${fmt(requiredBuildingFootprintAc, 2)} ac`} />
+                    <Metric label="Required building footprint (unconstrained)" value={`${fmt(requiredBldg.footprintAc, 2)} ac`} />
+                    <Metric label="Footprint used in land allocation (coverage-capped)" value={`${fmt(requiredBuildingFootprintAc, 2)} ac`} />
                     <Metric label="Coverage-limited max footprint" value={`${fmt(envelope.envelopeFootprintAc, 2)} ac`} />
+                    <Metric label="Site coverage setting" value={`${fmt(app.inputs.siteCoveragePct, 0)}%`} />
                     <Metric label="Stories" value={`${Math.max(1, Math.round(app.inputs.stories))}`} />
                     <Metric label="Support %" value={`${fmt(app.inputs.supportPct, 0)}%`} />
                   </CardContent>
@@ -4104,8 +4132,9 @@ export default function DataCenterFeasibilityTool() {
                   </CardHeader>
                   <CardContent className="text-sm text-slate-700">
                     <ul className="list-disc space-y-1 pl-5">
-                      <li><b>Buildable:</b> Buildable acres = Parcel acres × Buildable %.</li>
-                      <li><b>Required footprint:</b> For a given effective IT MW and Stories, required building footprint is computed from racks and ft²/rack, then capped to the coverage-limited envelope.</li>
+                      <li><b>Buildable:</b> Buildable acres = Parcel acres � Buildable %. This is the total developable land budget used in land allocation.</li>
+                      <li><b>Site coverage:</b> Coverage-limited building envelope = Buildable acres � Site coverage %. This only caps building footprint.</li>
+                      <li><b>Required footprint:</b> For a given effective IT MW and Stories, unconstrained required building footprint is computed from racks and ft�/rack; land allocation uses the coverage-capped footprint.</li>
                       <li><b>MEP yard land:</b> MEP acres = Building footprint × (MEP %).</li>
                       <li><b>Roads/Parking land:</b> Roads acres = (Building + MEP + Substation) × (Roads %).</li>
                       <li><b>Substation land:</b> Substation acres = max(Substation minimum input, 1.25 + 0.0075 × Facility MW).</li>
@@ -4139,5 +4168,3 @@ export default function DataCenterFeasibilityTool() {
     </div>
   );
 }
-
-
