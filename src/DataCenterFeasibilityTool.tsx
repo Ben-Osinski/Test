@@ -21,6 +21,8 @@ import {
   Cell,
   BarChart,
   Bar,
+  ComposedChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -634,6 +636,8 @@ type TechCategory =
   | "Wind"
   | "BESS";
 
+type FirmDispatchCategory = Exclude<TechCategory, "PV" | "Wind" | "BESS">;
+
 type LibraryBasis = "conservative" | "typical" | "aggressive";
 
 const TECH_CATEGORY_ORDER: TechCategory[] = [
@@ -647,6 +651,42 @@ const TECH_CATEGORY_ORDER: TechCategory[] = [
   "Wind",
   "BESS",
 ];
+
+const DISPATCH_FIRM_CATEGORIES: FirmDispatchCategory[] = ["Grid", "RICE", "SCGT", "CCGT", "FuelCell", "Nuclear"];
+
+const DISPATCH_PROFILE_24H: { pv: number[]; wind: number[] } = {
+  // Representative normalized day shape (screening only).
+  pv: [0, 0, 0, 0, 0, 0.02, 0.08, 0.2, 0.4, 0.62, 0.8, 0.92, 1, 0.95, 0.82, 0.62, 0.38, 0.16, 0.05, 0.01, 0, 0, 0, 0],
+  wind: [0.45, 0.42, 0.4, 0.38, 0.36, 0.34, 0.32, 0.3, 0.28, 0.26, 0.25, 0.24, 0.24, 0.26, 0.28, 0.31, 0.34, 0.38, 0.42, 0.46, 0.5, 0.52, 0.5, 0.47],
+};
+
+const DISPATCH_SERIES_COLORS = {
+  pvMW: BRAND.yellowOrange,
+  windMW: BRAND.teal,
+  bessDischargeMW: BRAND.purple,
+  requiredMW: BRAND.onyx,
+  socMWh: BRAND.slate,
+  excessMW: "#0EA5E9",
+  unservedMW: "#B91C1C",
+};
+
+const DISPATCH_FIRM_CATEGORY_COLORS: Record<FirmDispatchCategory, string> = {
+  Grid: BRAND.midnight,
+  RICE: "#7C4A2E",
+  SCGT: "#A35A2B",
+  CCGT: "#2A6F9E",
+  FuelCell: "#3F7A5B",
+  Nuclear: "#5F4B8B",
+};
+
+const DISPATCH_FIRM_MIN_LOAD_PCT: Record<FirmDispatchCategory, number> = {
+  Grid: 0,
+  RICE: 0.25,
+  SCGT: 0.35,
+  CCGT: 0.5,
+  FuelCell: 0.5,
+  Nuclear: 0.9,
+};
 
 const LIBRARY_BASIS_LABELS: Record<LibraryBasis, string> = {
   conservative: "Conservative",
@@ -1232,6 +1272,7 @@ type PowerState = {
   reliability: ReliabilityLevel;
   sizeToFacility: boolean;
   libraryBasis: LibraryBasis;
+  dispatchMinLoadEnabled?: boolean;
 
   elccEnabled: boolean;
   pvElccPct: number;
@@ -1258,6 +1299,43 @@ type AppState = {
   power: PowerState;
   mapping: MappingState;
 };
+
+type DispatchHourRow = {
+  hour: string;
+  requiredMW: number;
+  pvMW: number;
+  windMW: number;
+  bessChargeMW: number;
+  bessDischargeMW: number;
+  excessMW: number;
+  unservedMW: number;
+  curtailedMW: number;
+  socMWh: number;
+  servedMW: number;
+  firmMW: number;
+  [firmCategoryKey: string]: number | string;
+};
+
+type DispatchResult = {
+  byHour: DispatchHourRow[];
+  stackKeys: string[];
+  totals: {
+    servedMWh: number;
+    unservedMWh: number;
+    curtailedMWh: number;
+    excessMWh: number;
+    renewableServedMWh: number;
+    firmServedMWh: number;
+  };
+};
+
+function isFirmDispatchCategory(category: TechCategory): category is FirmDispatchCategory {
+  return (DISPATCH_FIRM_CATEGORIES as string[]).includes(category);
+}
+
+function firmDispatchKey(category: FirmDispatchCategory) {
+  return `firm_${category}`;
+}
 
 const APP_SCHEMA_VERSION = 19;
 
@@ -1292,6 +1370,7 @@ const DEFAULTS: AppState = {
     reliability: "99.9",
     sizeToFacility: true,
     libraryBasis: "typical",
+    dispatchMinLoadEnabled: true,
 
     elccEnabled: false,
     pvElccPct: 40,
@@ -1593,6 +1672,163 @@ function computeDispatchSummary(requiredMW: number, computedRows: any[]) {
   };
 }
 
+function computeDispatch24h(requiredMW: number, computedRows: any[], bessDurationHr: number, dispatchMinLoadEnabled: boolean): DispatchResult {
+  const req = Math.max(0, requiredMW);
+  const pvInstalledMW = computedRows
+    .filter((r: any) => r.tech?.category === "PV")
+    .reduce((sum: number, r: any) => sum + (r.installedMW || 0), 0);
+  const windInstalledMW = computedRows
+    .filter((r: any) => r.tech?.category === "Wind")
+    .reduce((sum: number, r: any) => sum + (r.installedMW || 0), 0);
+  const bessInstalledMW = computedRows
+    .filter((r: any) => r.tech?.category === "BESS")
+    .reduce((sum: number, r: any) => sum + (r.installedMW || 0), 0);
+
+  const chargeEff = 0.95;
+  const dischargeEff = 0.95;
+  const bessPowerCapMW = Math.max(0, bessInstalledMW);
+  const bessEnergyCapMWh = bessPowerCapMW * Math.max(0, bessDurationHr);
+  let socMWh = bessEnergyCapMWh * 0.5;
+
+  const firmRows = computedRows
+    .filter((r: any) => r.tech?.isFirm && (r.firmAvailableMW || 0) > 0)
+    .map((r: any) => ({
+      category: r.tech.category as TechCategory,
+      name: String(r.tech.name || ""),
+      availableMW: Math.max(0, r.firmAvailableMW || 0),
+      heatRate: Math.max(0, r.tech.heatRateBtuPerKWh || 0),
+      minLoadPct: DISPATCH_FIRM_MIN_LOAD_PCT[r.tech.category as FirmDispatchCategory] || 0,
+    }))
+    .filter((r: any) => isFirmDispatchCategory(r.category))
+    .sort((a: any, b: any) => {
+      if (a.heatRate !== b.heatRate) return a.heatRate - b.heatRate;
+      return a.name.localeCompare(b.name);
+    });
+
+  const dispatchByFirmCategoryKey: Record<string, number> = {};
+  const byHour: DispatchHourRow[] = [];
+
+  let servedMWh = 0;
+  let unservedMWh = 0;
+  let curtailedMWh = 0;
+  let excessMWh = 0;
+  let renewableServedMWh = 0;
+  let firmServedMWh = 0;
+
+  for (let h = 0; h < 24; h++) {
+    const hourLabel = `${String(h).padStart(2, "0")}:00`;
+    const row: DispatchHourRow = {
+      hour: hourLabel,
+      requiredMW: req,
+      pvMW: 0,
+      windMW: 0,
+      bessChargeMW: 0,
+      bessDischargeMW: 0,
+      excessMW: 0,
+      unservedMW: 0,
+      curtailedMW: 0,
+      socMWh: socMWh,
+      servedMW: 0,
+      firmMW: 0,
+    };
+
+    for (const category of DISPATCH_FIRM_CATEGORIES) {
+      row[firmDispatchKey(category)] = 0;
+    }
+
+    let remainingMW = req;
+    const pvAvailMW = Math.max(0, pvInstalledMW * (DISPATCH_PROFILE_24H.pv[h] || 0));
+    const windAvailMW = Math.max(0, windInstalledMW * (DISPATCH_PROFILE_24H.wind[h] || 0));
+
+    row.pvMW = Math.min(remainingMW, pvAvailMW);
+    remainingMW = Math.max(0, remainingMW - row.pvMW);
+
+    row.windMW = Math.min(remainingMW, windAvailMW);
+    remainingMW = Math.max(0, remainingMW - row.windMW);
+
+    let renewableExcessMW = Math.max(0, pvAvailMW - row.pvMW) + Math.max(0, windAvailMW - row.windMW);
+
+    if (bessPowerCapMW > 0 && bessEnergyCapMWh > 0 && renewableExcessMW > 0) {
+      const chargePowerLimitMW = Math.min(bessPowerCapMW, renewableExcessMW);
+      const availableRoomMWh = Math.max(0, bessEnergyCapMWh - socMWh);
+      const roomLimitedChargeMW = availableRoomMWh / chargeEff;
+      row.bessChargeMW = Math.min(chargePowerLimitMW, roomLimitedChargeMW);
+      socMWh = Math.min(bessEnergyCapMWh, socMWh + row.bessChargeMW * chargeEff);
+      renewableExcessMW = Math.max(0, renewableExcessMW - row.bessChargeMW);
+    }
+
+    if (bessPowerCapMW > 0 && socMWh > 0 && remainingMW > 0) {
+      const socDeliverableMW = socMWh * dischargeEff;
+      row.bessDischargeMW = Math.min(remainingMW, bessPowerCapMW, socDeliverableMW);
+      const socWithdrawMWh = row.bessDischargeMW / dischargeEff;
+      socMWh = Math.max(0, socMWh - socWithdrawMWh);
+      remainingMW -= row.bessDischargeMW;
+    }
+
+    // Apply firm minimum-load floors before merit-order headroom dispatch.
+    for (const fr of firmRows) {
+      const minLoadMW = dispatchMinLoadEnabled ? Math.min(fr.availableMW, fr.availableMW * fr.minLoadPct) : 0;
+      if (minLoadMW <= 1e-9) continue;
+      const key = firmDispatchKey(fr.category);
+      row[key] = Math.max(0, Number(row[key] || 0) + minLoadMW);
+      dispatchByFirmCategoryKey[key] = Math.max(0, (dispatchByFirmCategoryKey[key] || 0) + minLoadMW);
+      remainingMW -= minLoadMW;
+    }
+
+    for (const fr of firmRows) {
+      if (remainingMW <= 1e-9) break;
+      const key = firmDispatchKey(fr.category);
+      const minLoadMW = dispatchMinLoadEnabled ? Math.min(fr.availableMW, fr.availableMW * fr.minLoadPct) : 0;
+      const headroomMW = Math.max(0, fr.availableMW - minLoadMW);
+      const dispatchMW = Math.min(remainingMW, headroomMW);
+      if (dispatchMW <= 1e-9) continue;
+      row[key] = Math.max(0, Number(row[key] || 0) + dispatchMW);
+      dispatchByFirmCategoryKey[key] = Math.max(0, (dispatchByFirmCategoryKey[key] || 0) + dispatchMW);
+      remainingMW -= dispatchMW;
+    }
+
+    row.unservedMW = Math.max(0, remainingMW);
+    row.excessMW = Math.max(0, -remainingMW);
+    row.curtailedMW = Math.max(0, renewableExcessMW);
+    row.socMWh = socMWh;
+
+    const firmMW = DISPATCH_FIRM_CATEGORIES.reduce(
+      (sum, category) => sum + Math.max(0, Number(row[firmDispatchKey(category)] || 0)),
+      0
+    );
+    row.firmMW = firmMW;
+    row.servedMW = Math.max(0, req - row.unservedMW);
+
+    const renewableServedMW = row.pvMW + row.windMW + row.bessDischargeMW;
+
+    servedMWh += row.servedMW;
+    unservedMWh += row.unservedMW;
+    curtailedMWh += row.curtailedMW;
+    excessMWh += row.excessMW;
+    renewableServedMWh += renewableServedMW;
+    firmServedMWh += firmMW;
+
+    byHour.push(row);
+  }
+
+  const stackKeys = DISPATCH_FIRM_CATEGORIES.map((category) => firmDispatchKey(category)).filter(
+    (key) => (dispatchByFirmCategoryKey[key] || 0) > 1e-6
+  );
+
+  return {
+    byHour,
+    stackKeys,
+    totals: {
+      servedMWh,
+      unservedMWh,
+      curtailedMWh,
+      excessMWh,
+      renewableServedMWh,
+      firmServedMWh,
+    },
+  };
+}
+
 // -----------------------
 // Dev self-tests (non-throwing)
 // -----------------------
@@ -1606,6 +1842,39 @@ function runSelfTests() {
 
     const fac = computeFacilityPower(eff.itMW, DEFAULTS.inputs.pue);
     console.assert(fac.facilityMW >= eff.itMW, "Self-test: facility MW >= IT MW when PUE>=1");
+
+    const powerRows = computePowerMix(DEFAULTS.power);
+    const dispatch = computeDispatch24h(
+      fac.facilityMW,
+      powerRows,
+      DEFAULTS.power.bessDurationHr,
+      DEFAULTS.power.dispatchMinLoadEnabled ?? true
+    );
+    const bessInstalledMW = powerRows
+      .filter((r: any) => r.tech?.category === "BESS")
+      .reduce((sum: number, r: any) => sum + (r.installedMW || 0), 0);
+    const bessEnergyCapMWh = Math.max(0, bessInstalledMW * DEFAULTS.power.bessDurationHr);
+
+    console.assert(dispatch.byHour.length === 24, "Self-test: dispatch should include 24 hourly points");
+
+    for (const hr of dispatch.byHour) {
+      const firmFromStacks = dispatch.stackKeys.reduce((sum, key) => sum + Math.max(0, Number(hr[key] || 0)), 0);
+      const supply = Math.max(0, hr.pvMW + hr.windMW + hr.bessDischargeMW + firmFromStacks);
+      const balanceError = Math.abs(supply + hr.unservedMW - hr.excessMW - hr.requiredMW);
+      console.assert(balanceError <= 1e-6, "Self-test: dispatch hourly load balance");
+      console.assert(hr.socMWh >= -1e-6 && hr.socMWh <= bessEnergyCapMWh + 1e-6, "Self-test: BESS SOC bounded");
+      console.assert(
+        hr.pvMW >= -1e-6 &&
+          hr.windMW >= -1e-6 &&
+          hr.bessChargeMW >= -1e-6 &&
+          hr.bessDischargeMW >= -1e-6 &&
+          hr.excessMW >= -1e-6 &&
+          hr.unservedMW >= -1e-6 &&
+          hr.curtailedMW >= -1e-6,
+        "Self-test: dispatch components should be non-negative"
+      );
+      console.assert(!(hr.excessMW > 1e-6 && hr.unservedMW > 1e-6), "Self-test: excess and unserved should not co-occur");
+    }
   } catch {
     // ignore
   }
@@ -1821,6 +2090,38 @@ export default function DataCenterFeasibilityTool() {
   const dispatchSummary = useMemo(
     () => computeDispatchSummary(requiredMW, computedRows),
     [requiredMW, computedRows]
+  );
+  const dispatchMinLoadEnabled = app.power.dispatchMinLoadEnabled ?? true;
+  const dispatch24h = useMemo(
+    () => computeDispatch24h(requiredMW, computedRows, app.power.bessDurationHr, dispatchMinLoadEnabled),
+    [requiredMW, computedRows, app.power.bessDurationHr, dispatchMinLoadEnabled]
+  );
+  const dispatchFirmSeries = useMemo(
+    () =>
+      dispatch24h.stackKeys.map((key) => {
+        const category = key.replace("firm_", "") as FirmDispatchCategory;
+        return {
+          key,
+          label: `${category} (firm)`,
+          color: DISPATCH_FIRM_CATEGORY_COLORS[category] || BRAND.slate,
+        };
+      }),
+    [dispatch24h.stackKeys]
+  );
+  const dispatchChartHasData = useMemo(
+    () =>
+      dispatch24h.byHour.some(
+        (h) =>
+          h.requiredMW > 1e-6 ||
+          h.pvMW > 1e-6 ||
+          h.windMW > 1e-6 ||
+          h.bessDischargeMW > 1e-6 ||
+          h.excessMW > 1e-6 ||
+          h.unservedMW > 1e-6 ||
+          h.curtailedMW > 1e-6 ||
+          dispatch24h.stackKeys.some((k) => Number(h[k] || 0) > 1e-6)
+      ),
+    [dispatch24h.byHour, dispatch24h.stackKeys]
   );
 
   const dcWater = useMemo(() => {
@@ -3687,6 +3988,98 @@ export default function DataCenterFeasibilityTool() {
                     ) : (
                       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Add units to see mix.</div>
                     )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="mt-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center justify-between">
+                      <span>Representative Dispatch (24h)</span>
+                      <Badge tone="info">Screening</Badge>
+                    </CardTitle>
+                    <div className="text-xs text-muted-foreground">
+                      Built-in archetype day; flat required load from current sizing mode.
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex items-center justify-end gap-2">
+                      <Label className="text-xs">Min-load constraints</Label>
+                      <Switch checked={dispatchMinLoadEnabled} onCheckedChange={(c) => setPower({ dispatchMinLoadEnabled: !!c })} />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                      <Metric label="Renewable served" value={`${fmt(dispatch24h.totals.renewableServedMWh, 0)} MWh/day`} />
+                      <Metric label="Firm served" value={`${fmt(dispatch24h.totals.firmServedMWh, 0)} MWh/day`} />
+                      <Metric label="Excess / export" value={`${fmt(dispatch24h.totals.excessMWh, 0)} MWh/day`} />
+                      <Metric label="Curtailment" value={`${fmt(dispatch24h.totals.curtailedMWh, 0)} MWh/day`} />
+                      <Metric label="Unserved" value={`${fmt(dispatch24h.totals.unservedMWh, 0)} MWh/day`} />
+                    </div>
+
+                    {dispatchChartHasData ? (
+                      <div className="h-80">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <ComposedChart data={dispatch24h.byHour} margin={{ top: 10, right: 28, left: 0, bottom: 20 }}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="hour" tick={{ fontSize: 11 }} />
+                            <YAxis yAxisId="mw" tick={{ fontSize: 11 }} />
+                            <YAxis yAxisId="mwh" orientation="right" tick={{ fontSize: 11 }} />
+                            <Tooltip />
+                            <Legend />
+                            <Bar yAxisId="mw" dataKey="pvMW" name="PV" stackId="dispatch" fill={DISPATCH_SERIES_COLORS.pvMW} />
+                            <Bar yAxisId="mw" dataKey="windMW" name="Wind" stackId="dispatch" fill={DISPATCH_SERIES_COLORS.windMW} />
+                            <Bar
+                              yAxisId="mw"
+                              dataKey="bessDischargeMW"
+                              name="BESS discharge"
+                              stackId="dispatch"
+                              fill={DISPATCH_SERIES_COLORS.bessDischargeMW}
+                            />
+                            {dispatchFirmSeries.map((series) => (
+                              <Bar key={series.key} yAxisId="mw" dataKey={series.key} name={series.label} stackId="dispatch" fill={series.color} />
+                            ))}
+                            <Bar
+                              yAxisId="mw"
+                              dataKey="excessMW"
+                              name="Excess / Export"
+                              stackId="dispatch"
+                              fill={DISPATCH_SERIES_COLORS.excessMW}
+                            />
+                            <Bar yAxisId="mw" dataKey="unservedMW" name="Unserved" stackId="dispatch" fill={DISPATCH_SERIES_COLORS.unservedMW} />
+                            <Line
+                              yAxisId="mw"
+                              type="monotone"
+                              dataKey="requiredMW"
+                              name="Required MW"
+                              stroke={DISPATCH_SERIES_COLORS.requiredMW}
+                              strokeWidth={2}
+                              dot={false}
+                            />
+                            <Line
+                              yAxisId="mwh"
+                              type="monotone"
+                              dataKey="socMWh"
+                              name="BESS SOC (MWh)"
+                              stroke={DISPATCH_SERIES_COLORS.socMWh}
+                              strokeDasharray="5 3"
+                              dot={false}
+                            />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : (
+                      <div className="flex h-56 items-center justify-center text-sm text-muted-foreground">
+                        No dispatch signal yet. Add required load and technology capacity to render the representative day.
+                      </div>
+                    )}
+
+                    <div className="text-xs text-muted-foreground">
+                      Merit + rules screening dispatch: PV/Wind first, then BESS, then firm technologies by heat-rate order. When min-load constraints
+                      are enabled, firm minimums are applied by category (Grid 0%, RICE 25%, SCGT 35%, CCGT/FuelCell 50%, Nuclear 90%), and excess
+                      shows as export/spill. This is not an hourly market/economic dispatch model, and profile shapes are archetypal rather than
+                      site-specific.
+                    </div>
                   </CardContent>
                 </Card>
               </div>
